@@ -1,0 +1,35 @@
+[package]
+name = "collima-core"
+description = "In-memory RAW decoding, optical focal-plane tilt diagnostics, and sensor read-noise calibration engine for WebAssembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Primary pure-Rust RAW engine: supports ~40 formats including Sony ARW6 (latest video-RAW-derived
+# wavelet compression), Sony Lossless ARW, Canon CR3 (CRX + C-RAW) & CR2, classic Nikon NEF,
+# DNG (incl. JPEG XL DNG 1.7), Fujifilm RAF, Panasonic/Leica RW2/RWL, Olympus ORF, Pentax PEF.
+flashraw = { version = "0.2.0", default-features = false, features = ["simd", "jpegxl", "serde"] }
+
+# Dedicated clean-room Rust decoder for Nikon High Efficiency (HE / HE*) NEF files
+# (intoPIX TicoRAW / N-RAW JPEG XS wavelet compression on Z9, Z8, Zf, Z6III, Z5II, Z50II, ZR).
+ticoraw = { version = "0.2.0", default-features = false }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+wasm-bindgen = "=0.2.130"
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+console_error_panic_hook = "0.1.7"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+flashraw = { version = "0.2.0", default-features = false, features = ["simd", "jpegxl", "serde", "rayon"] }
+ticoraw = { version = "0.2.0", default-features = false, features = ["parallel"] }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

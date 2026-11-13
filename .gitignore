@@ -1,0 +1,40 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+
+# WASM build artifacts (generated into web/src/wasm-pkg)
+/crates/collima-core/pkg/
+/web/src/wasm-pkg/
+
+# Node / Frontend
+/web/node_modules/
+/web/dist/
+/web/.vite/
+*.local
+
+# Optional local RAW test fixtures (large camera files)
+/tests/fixtures/
+*.ARW
+*.arw
+*.NEF
+*.nef
+*.CR2
+*.cr2
+*.CR3
+*.cr3
+*.DNG
+*.dng
+*.RAF
+*.raf
+*.RW2
+*.rw2
+*.ORF
+*.orf
+*.PEF
+*.pef
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
