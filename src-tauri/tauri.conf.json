@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "io.github.hvoid.collima",
   "build": {
-    "beforeDevCommand": "npm --prefix web run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "node scripts/build-web-if-needed.mjs",
+    "beforeBuildCommand": "node ../scripts/build-web-if-needed.mjs",
     "frontendDist": "../web/dist"
   },
   "app": {
