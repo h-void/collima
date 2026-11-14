@@ -194,6 +194,7 @@ jobs:
         with:
           workspaces: 'src-tauri -> target'
           key: ${{ matrix.id }}
+          cache-on-failure: true
 
       - name: Install Tauri CLI
         working-directory: web
@@ -222,9 +223,8 @@ jobs:
           SKIP_WEB_BUILD: '1'
           APPLE_SIGNING_IDENTITY: '-'
         run: |
-          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles app
-          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles dmg \
-            || (sleep 4 && npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles dmg)
+          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles app,dmg \
+            || (sleep 4 && npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles app,dmg)
 
       - name: Build Tauri bundles (Windows)
         if: runner.os == 'Windows'
