@@ -6,9 +6,13 @@ async fn save_export_file(
     app: tauri::AppHandle,
     default_name: String,
     content: String,
+    dialog_title: Option<String>,
 ) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut builder = app.dialog().file().set_file_name(&default_name);
+        if let Some(title) = dialog_title.as_deref().filter(|s| !s.trim().is_empty()) {
+            builder = builder.set_title(title);
+        }
         let lower = default_name.to_ascii_lowercase();
         if lower.ends_with(".csv") {
             builder = builder.add_filter("CSV Calibration Report", &["csv"]);
@@ -22,13 +26,13 @@ async fn save_export_file(
 
         let path = file_path
             .into_path()
-            .map_err(|e| format!("无法解析导出路径: {e}"))?;
+            .map_err(|e| format!("Failed to resolve export path: {e}"))?;
         std::fs::write(&path, content.as_bytes())
-            .map_err(|e| format!("写入文件失败 ({}): {e}", path.display()))?;
+            .map_err(|e| format!("Failed to write export file ({}): {e}", path.display()))?;
         Ok(true)
     })
     .await
-    .map_err(|e| format!("导出任务失败: {e}"))?
+    .map_err(|e| format!("Export task failed: {e}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

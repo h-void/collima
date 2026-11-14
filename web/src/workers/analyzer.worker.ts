@@ -127,7 +127,9 @@ function openSessionFromBytes(
   postWorkerMessage({
     type: 'PROGRESS',
     requestId,
-    stage: `正在内存解码 ${filename} 并提取拜耳四通道与 G1/G2 锐度梯度…`,
+    stage: `Decoding ${filename} in memory…`,
+    progressKey: 'decoding_bayer',
+    progressParams: { filename },
     completed: 1,
     total: 3,
   });
@@ -143,7 +145,8 @@ function openSessionFromBytes(
     postWorkerMessage({
       type: 'PROGRESS',
       requestId,
-      stage: '正在生成色彩标定 2×2 预览轨与九宫格 1:1 采样切片…',
+      stage: 'Rendering overview & 9-zone 1:1 sensor patches…',
+      progressKey: 'rendering_patches',
       completed: 2,
       total: 3,
     });
@@ -205,10 +208,16 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
         ) {
           return;
         }
+        const sizeMb = (req.file.size / (1024 * 1024)).toFixed(1);
         postWorkerMessage({
           type: 'PROGRESS',
           requestId: req.requestId,
-          stage: `正在读取本地文件流 ${req.file.name} (${(req.file.size / (1024 * 1024)).toFixed(1)} MB)…`,
+          stage: `Reading local file stream ${req.file.name} (${sizeMb} MB)…`,
+          progressKey: 'reading_file',
+          progressParams: {
+            filename: req.file.name,
+            sizeMb,
+          },
           completed: 0,
           total: 3,
         });
@@ -241,7 +250,8 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
         postWorkerMessage({
           type: 'PROGRESS',
           requestId: req.requestId,
-          stage: '正在合成 14-bit 无压缩 RGGB 标定样张 (.DNG)…',
+          stage: 'Synthesizing 14-bit uncompressed RGGB calibration frame (.DNG)…',
+          progressKey: 'synthesizing_dng',
           completed: 0,
           total: 3,
         });
@@ -278,7 +288,7 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
           return;
         }
         if (!activeSession) {
-          throw new Error('当前无活动 RAW 会话');
+          throw new Error('No active RAW session');
         }
         const summary = activeSession.getSummary() as {
           sharpness: SharpnessReport;
@@ -319,7 +329,7 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
           return;
         }
         if (!activeSession) {
-          throw new Error('当前无活动 RAW 会话');
+          throw new Error('No active RAW session');
         }
         const updatedSharpness = activeSession.relocateStation(
           req.stationIdx,
@@ -361,7 +371,7 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
           return;
         }
         if (!activeSession) {
-          throw new Error('当前无活动 RAW 会话');
+          throw new Error('No active RAW session');
         }
         const resetSharpness = activeSession.resetStations() as SharpnessReport;
         const { patchDescs, patchBuffers } = renderAllPatches(
@@ -402,7 +412,13 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
           postWorkerMessage({
             type: 'PROGRESS',
             requestId: req.requestId,
-            stage: `正在分析暗帧 (${i + 1}/${total})：${file.name}`,
+            stage: `Analyzing dark frame (${i + 1}/${total}): ${file.name}`,
+            progressKey: 'analyzing_dark_frame',
+            progressParams: {
+              current: i + 1,
+              total,
+              filename: file.name,
+            },
             completed: i,
             total,
           });
@@ -476,7 +492,13 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
           postWorkerMessage({
             type: 'PROGRESS',
             requestId: req.requestId,
-            stage: `正在生成并标定合成双原生 ISO 暗帧：ISO ${iso} (${i + 1}/${isoSteps.length})`,
+            stage: `Synthesizing & calibrating dual-gain dark frame: ISO ${iso} (${i + 1}/${isoSteps.length})`,
+            progressKey: 'generating_synth_iso',
+            progressParams: {
+              iso,
+              current: i + 1,
+              total: isoSteps.length,
+            },
             completed: i,
             total: isoSteps.length,
           });
@@ -506,7 +528,7 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
     }
   } catch (err) {
     const message =
-      err instanceof Error ? err.message : String(err ?? '未知 WASM 分析错误');
+      err instanceof Error ? err.message : String(err ?? 'Unknown WASM analysis error');
     postWorkerMessage({
       type: 'ERROR',
       requestId: req.requestId,

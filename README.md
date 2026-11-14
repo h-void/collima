@@ -2,7 +2,7 @@
 
 **`collima`** 是一个纯本地运行的跨平台相机与镜头光学诊断工作台（支持 **Web 浏览器在线即开即用** 与 **Tauri v2 原生桌面端**）。底层基于 **Rust + WebAssembly** 实现纯内存（零云端上传）RAW 原始字节流解码与拜耳像素统计，前端基于 **React + Web Worker + HTML5 Canvas** 提供零延迟的 1:1 像素级视觉检视。
 
-- 🌐 **在线体验（GitHub Pages）**：<https://h-void.github.io/collima/>
+- 🌐 **在线体验（GitHub Pages，支持 简体中文 / 繁體中文 / English / 日本語）**：<https://h-void.github.io/collima/>
 - 📦 **全平台桌面端与离线包下载（Windows x64/ARM64 · macOS Apple Silicon/Intel · Linux x64/ARM64）**：[GitHub Releases](https://github.com/h-void/collima/releases)
 
 ---
@@ -31,6 +31,9 @@
     $$\displaystyle \text{DR} _ {\text{EV}} = \log_2 \left( \frac{\text{WhiteLevel} - \text{BlackLevel}}{\sigma _ {\text{ADU}}} \right)$$
 
 - **双原生 ISO / 高转换增益（HCG）拐点自动捕获**：基于物理单调性与二阶斜率跳变判据，精准标注双原生 ISO 增益切换点（同时免疫老款非 ISO 不变性传感器的平滑 PGA 增益曲线误报），支持一键导出 CSV / JSON 标定数据。
+
+### 3. 四语实时响应国际化（`zh-CN` · `zh-TW` · `en` · `ja`）
+- 自动匹配操作系统 / 浏览器语言偏好（亦支持 `?lang=zh-CN|zh-TW|en|ja` 参数直达与 `localStorage` 记忆），顶栏一键切换语言时无需重新解码 60MP RAW 字节流即可实时重译全部光学与底噪诊断报告。
 
 ---
 
@@ -68,9 +71,11 @@ collima/
     ├── package.json
     ├── vite.config.ts
     └── src/
+        ├── i18n/                     # 四语词典 (zh-CN/zh-TW/en/ja)、诊断动态本地化与 I18nProvider
         ├── types/collima.ts          # 前后端强类型契约与 Worker 零拷贝消息协议
         ├── workers/analyzer.worker.ts# 独立 Web Worker 线程管理 WASM 生命周期与串行批处理队列
         ├── components/
+        │   ├── LanguageSwitcher.tsx  # 顶栏多语言切换器
         │   ├── DropZone.tsx          # 单张/多张 RAW 拖拽校验与一键 14-bit 合成标定样张加载
         │   ├── TiltInspector.tsx     # 九宫格 1:1 同步最近邻放大画布 + 5x5 等高线热力图 + 极坐标罗盘
         │   └── NoiseChart.tsx        # 双轴对数 σ_ADU / EV 动态范围交互曲线 + G1 高斯直方图 + CSV/JSON 导出

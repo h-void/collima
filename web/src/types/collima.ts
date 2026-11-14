@@ -271,11 +271,21 @@ export type WorkerRequest =
       requestId: number;
     };
 
+export type WorkerProgressKey =
+  | 'reading_file'
+  | 'decoding_bayer'
+  | 'rendering_patches'
+  | 'synthesizing_dng'
+  | 'analyzing_dark_frame'
+  | 'generating_synth_iso';
+
 export type WorkerResponse =
   | {
       type: 'PROGRESS';
       requestId: number;
       stage: string;
+      progressKey?: WorkerProgressKey;
+      progressParams?: Record<string, string | number>;
       completed: number;
       total: number;
     }

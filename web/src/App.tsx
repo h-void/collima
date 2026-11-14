@@ -9,13 +9,17 @@ import {
   X,
 } from 'lucide-react';
 import { DropZone } from './components/DropZone';
+import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { TiltInspector } from './components/TiltInspector';
 import { NoiseChart } from './components/NoiseChart';
+import { formatWorkerProgress } from './i18n/diagnostics';
+import { useI18n } from './i18n/useI18n';
 import type {
   ActiveTiltSessionData,
   IsoNoiseSeriesReport,
   PatchRenderModeCode,
   SyntheticPresetId,
+  WorkerProgressKey,
   WorkerRequest,
   WorkerResponse,
 } from './types/collima';
@@ -25,6 +29,7 @@ type WorkbenchMode = 'tilt' | 'noise';
 const PATCH_SIZE = 256;
 
 export const App: React.FC = () => {
+  const { locale, t } = useI18n();
   const [mode, setMode] = useState<WorkbenchMode>('tilt');
   const [tiltSession, setTiltSession] = useState<ActiveTiltSessionData | null>(
     null,
@@ -35,6 +40,8 @@ export const App: React.FC = () => {
   const [progress, setProgress] = useState<{
     requestId: number;
     stage: string;
+    progressKey?: WorkerProgressKey;
+    progressParams?: Record<string, string | number>;
     completed: number;
     total: number;
   } | null>(null);
@@ -76,6 +83,8 @@ export const App: React.FC = () => {
           setProgress({
             requestId: msg.requestId,
             stage: msg.stage,
+            progressKey: msg.progressKey,
+            progressParams: msg.progressParams,
             completed: msg.completed,
             total: msg.total,
           });
@@ -205,7 +214,7 @@ export const App: React.FC = () => {
 
     worker.onerror = (err) => {
       setProgress(null);
-      setErrorMsg(err.message || 'Web Worker 运行异常');
+      setErrorMsg(err.message || '');
     };
 
     return () => {
@@ -355,15 +364,13 @@ export const App: React.FC = () => {
             <div>
               <h1 className="brand-title">
                 <span>collima</span>
-                <span className="brand-subtitle">
-                  浏览器端镜头光轴与传感器底噪诊断工作台
-                </span>
+                <span className="brand-subtitle">{t.brandSubtitle}</span>
               </h1>
             </div>
           </div>
 
           {/* Primary Workbench Mode Switcher */}
-          <nav aria-label="诊断模式切换" className="segmented-control">
+          <nav aria-label={t.navAriaLabel} className="segmented-control">
             <button
               id="tab-tilt-inspector"
               type="button"
@@ -371,7 +378,7 @@ export const App: React.FC = () => {
               className={`segmented-btn ${mode === 'tilt' ? 'is-active' : ''}`}
             >
               <Aperture size={15} className="mode-indicator" />
-              <span>Optical Tilt Inspector · 光轴与场曲检视</span>
+              <span>{t.tabTiltLabel}</span>
             </button>
             <button
               id="tab-sensor-noise-lab"
@@ -380,7 +387,7 @@ export const App: React.FC = () => {
               className={`segmented-btn ${mode === 'noise' ? 'is-active' : ''}`}
             >
               <FlaskConical size={15} className="mode-indicator" />
-              <span>Sensor Noise Lab · 底噪与双原生 ISO 测绘</span>
+              <span>{t.tabNoiseLabel}</span>
             </button>
           </nav>
 
@@ -395,7 +402,7 @@ export const App: React.FC = () => {
                   onClick={handleCloseTiltSession}
                   className="btn-instrument"
                 >
-                  返回标定台
+                  {t.btnBackToBench}
                 </button>
                 <DropZone
                   mode="tilt"
@@ -413,13 +420,18 @@ export const App: React.FC = () => {
                 onFilesAccepted={handleFilesAccepted}
               />
             )}
+            <LanguageSwitcher />
           </div>
         </div>
       </header>
 
       {/* EXIF, Sensor Geometry & Dual-Codec Telemetry Strip */}
       {activeMeta && (
-        <div className="telemetry-strip" role="region" aria-label="RAW 元数据与解码遥测">
+        <div
+          className="telemetry-strip"
+          role="region"
+          aria-label={t.telemetryRegionAria}
+        >
           <div className="telemetry-strip-inner mono-num">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="telemetry-kv font-sans">
@@ -429,7 +441,7 @@ export const App: React.FC = () => {
                 <>
                   <span className="telemetry-divider" />
                   <span className="telemetry-kv font-sans">
-                    <span>镜头</span>
+                    <span>{t.telemetryLens}</span>
                     <strong>{activeMeta.lensModel}</strong>
                   </span>
                 </>
@@ -446,12 +458,12 @@ export const App: React.FC = () => {
                     activeMeta.iso ? `ISO ${activeMeta.iso}` : null,
                   ]
                     .filter(Boolean)
-                    .join(' · ') || '手动曝光元数据'}
+                    .join(' · ') || t.telemetryManualExposure}
                 </strong>
               </span>
               <span className="telemetry-divider" />
               <span className="telemetry-kv">
-                <span>有效画幅</span>
+                <span>{t.telemetryActiveArea}</span>
                 <strong>
                   {activeMeta.activeWidth}×{activeMeta.activeHeight}
                 </strong>
@@ -479,7 +491,9 @@ export const App: React.FC = () => {
               </span>
               <span className="status-tag status-tag--pass">
                 <Activity size={11} />
-                <span>解码 {activeMeta.decodeMs.toFixed(1)} ms</span>
+                <span>
+                  {t.telemetryDecodeTime(activeMeta.decodeMs.toFixed(1))}
+                </span>
               </span>
             </div>
           </div>
@@ -496,7 +510,14 @@ export const App: React.FC = () => {
           <div className="max-w-[1680px] mx-auto flex items-center justify-between gap-4 text-xs">
             <div className="flex items-center gap-2 text-[var(--accent-amber)]">
               <Loader2 size={14} className="animate-spin" />
-              <span>{progress.stage}</span>
+              <span>
+                {formatWorkerProgress(
+                  progress.stage,
+                  progress.progressKey,
+                  progress.progressParams,
+                  locale,
+                )}
+              </span>
             </div>
             {progress.total > 0 && (
               <span className="mono-num text-[var(--text-secondary)]">
@@ -508,7 +529,7 @@ export const App: React.FC = () => {
       )}
 
       {/* Error Alert Banner */}
-      {errorMsg && (
+      {errorMsg !== null && (
         <div className="max-w-5xl mx-auto w-full px-4 pt-4">
           <div
             role="alert"
@@ -517,8 +538,8 @@ export const App: React.FC = () => {
             <div className="flex items-start gap-2.5">
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
               <div className="space-y-0.5">
-                <div className="font-semibold">RAW 内存解析异常</div>
-                <div>{errorMsg}</div>
+                <div className="font-semibold">{t.errorTitle}</div>
+                <div>{errorMsg || t.workerRuntimeError}</div>
               </div>
             </div>
             <button
@@ -526,7 +547,7 @@ export const App: React.FC = () => {
               type="button"
               onClick={() => setErrorMsg(null)}
               className="text-[hsl(3,88%,78%)] hover:text-white"
-              aria-label="关闭错误提示"
+              aria-label={t.errorDismissAria}
             >
               <X size={15} />
             </button>
@@ -569,7 +590,7 @@ export const App: React.FC = () => {
       </main>
 
       <footer className="border-t border-[var(--hairline-subtle)] py-3 px-4 text-center text-[11px] text-[var(--text-muted)]">
-        collima Optical &amp; Sensor Metrology Workbench · Rust + WebAssembly (flashraw Sony X-OCN [ARW 6.0] / CR3 / DNG + ticoraw Nikon HE/HE*) · 所有原始图像字节流仅在浏览器本地沙箱内存运算
+        {t.footerNote}
       </footer>
     </div>
   );

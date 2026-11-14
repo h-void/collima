@@ -906,7 +906,7 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
 
     if is_sony_xocn {
         warnings.push(
-            "检测到索尼 X-OCN / LLVC3 (ARW 6.0 已压缩 / 已压缩 HQ) 5/3 小波编码流：解码像素已经过 12→16-bit LLVC3 曲线线性化映射（BL=1024, WL=39002），EV 动态范围具备尺度不变性，但 σ_ADU 处于 LLVC3 线性域而非传感器原始 14-bit ADC 码值域。"
+            "Sony X-OCN / LLVC3 (ARW 6.0 Compressed / HQ) 5/3 wavelet stream detected: decoded pixels are mapped via the 12->16-bit LLVC3 linearization LUT (BL=1024, WL=39002). Engineering DR (EV) remains scale-invariant, while sigma_ADU is expressed in the linearized LLVC3 domain rather than raw 14-bit ADC codes."
                 .to_string(),
         );
     }

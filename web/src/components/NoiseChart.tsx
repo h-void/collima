@@ -12,6 +12,11 @@ import type {
   DarkFrameReport,
   IsoNoiseSeriesReport,
 } from '../types/collima';
+import {
+  localizeDarkFrameNotes,
+  localizeNoiseSeriesSummary,
+} from '../i18n/diagnostics';
+import { useI18n } from '../i18n/useI18n';
 
 interface NoiseChartProps {
   series: IsoNoiseSeriesReport;
@@ -27,10 +32,6 @@ const CHANNEL_COLORS: Record<'R' | 'G1' | 'G2' | 'B', string> = {
   G2: 'hsl(166, 62%, 46%)',
   B: 'hsl(201, 86%, 58%)',
 };
-
-function formatIsoText(iso: number): string {
-  return iso > 0 ? `ISO ${iso}` : 'ISO 未知';
-}
 
 function readChannelNoise(
   f: DarkFrameReport,
@@ -88,11 +89,17 @@ function triggerBrowserDownload(filename: string, mime: string, content: string)
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-function triggerDownload(filename: string, mime: string, content: string) {
+function triggerDownload(
+  filename: string,
+  mime: string,
+  content: string,
+  dialogTitle?: string,
+) {
   if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
     void invoke<boolean>('save_export_file', {
       defaultName: filename,
       content,
+      dialogTitle,
     }).catch(() => {
       triggerBrowserDownload(filename, mime, content);
     });
@@ -102,6 +109,7 @@ function triggerDownload(filename: string, mime: string, content: string) {
 }
 
 export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
+  const { locale, t } = useI18n();
   const [channelView, setChannelView] = useState<ChannelView>('mean');
   const [noiseAxisMode, setNoiseAxisMode] = useState<NoiseAxisMode>('raw_adu');
   const [selectedFrameKey, setSelectedFrameKey] = useState<string | null>(null);
@@ -119,6 +127,19 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
   }, [frames, selectedFrameKey]);
 
   const activeFrame: DarkFrameReport | undefined = frames[safeSelectedIdx];
+
+  const localizedSummary = useMemo(
+    () => localizeNoiseSeriesSummary(series, locale),
+    [series, locale],
+  );
+  const localizedFrameNotes = useMemo(
+    () => (activeFrame ? localizeDarkFrameNotes(activeFrame, locale) : []),
+    [activeFrame, locale],
+  );
+  const formatIsoText = useCallback(
+    (iso: number) => (iso > 0 ? `ISO ${iso}` : t.noise.isoUnknownFull),
+    [t.noise.isoUnknownFull],
+  );
 
   const getFrameChannelNoise = useCallback(
     (f: DarkFrameReport, ch: 'mean' | 'R' | 'G1' | 'G2' | 'B') =>
@@ -313,6 +334,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       `collima_noise_${slug || 'sensor'}.json`,
       'application/json;charset=utf-8',
       JSON.stringify(series, null, 2),
+      t.noise.exportDialogJsonTitle,
     );
   };
 
@@ -374,6 +396,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       'collima_sensor_noise_calibration.csv',
       'text/csv;charset=utf-8',
       csv,
+      t.noise.exportDialogCsvTitle,
     );
   };
 
@@ -384,11 +407,15 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
         <div className="space-y-1.5">
           <div className="flex items-center gap-2.5 flex-wrap">
             <h2 className="text-base font-semibold text-[var(--text-primary)]">
-              {series.cameraModel} · 传感器读出噪声与动态范围标定报告
+              {t.noise.reportTitle(series.cameraModel)}
             </h2>
-            <span className="status-tag">{frames.length} 张暗帧样本</span>
+            <span className="status-tag">
+              {t.noise.frameCountBadge(frames.length)}
+            </span>
           </div>
-          <p className="text-xs text-[var(--text-secondary)]">{series.summary}</p>
+          <p className="text-xs text-[var(--text-secondary)]">
+            {localizedSummary}
+          </p>
 
           {series.inflections.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -399,9 +426,12 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                 >
                   <Zap size={12} />
                   <span>
-                    双原生 ISO HCG 拐点：ISO {inf.fromIso} → ISO {inf.toIso}（等效噪声骤降{' '}
-                    {inf.normNoiseDropPct.toFixed(1)}%，动态范围回升 +
-                    {inf.drReboundEv.toFixed(2)} EV）
+                    {t.noise.inflectionBadge(
+                      inf.fromIso,
+                      inf.toIso,
+                      inf.normNoiseDropPct.toFixed(1),
+                      inf.drReboundEv.toFixed(2),
+                    )}
                   </span>
                 </span>
               ))}
@@ -417,7 +447,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             className="btn-instrument"
           >
             <FileSpreadsheet size={14} className="text-[var(--optical-green)]" />
-            <span>导出 CSV</span>
+            <span>{t.noise.btnExportCsv}</span>
           </button>
           <button
             id="btn-export-noise-json"
@@ -426,7 +456,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             className="btn-instrument"
           >
             <Download size={14} className="text-[var(--accent-amber)]" />
-            <span>导出 JSON</span>
+            <span>{t.noise.btnExportJson}</span>
           </button>
           <button
             id="btn-clear-noise-series"
@@ -435,7 +465,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             className="btn-instrument"
           >
             <Trash2 size={14} className="text-[var(--alert-coral)]" />
-            <span>清空列表</span>
+            <span>{t.noise.btnClearSeries}</span>
           </button>
         </div>
       </section>
@@ -443,13 +473,13 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       {/* Main Dual-Axis Interactive Chart + G1 Bell-Curve Histogram Inspector */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
         <section
-          aria-label="双轴读出噪声与动态范围交互曲线"
+          aria-label={t.noise.chartSectionAria}
           className="xl:col-span-8 instrument-panel overflow-hidden"
         >
           <div className="panel-header">
             <h3 className="panel-title">
               <BarChart3 size={15} className="text-[var(--accent-amber)]" />
-              <span>ISO 读出噪声 (Log2 ADU) 与工程动态范围 (EV) 双轴曲线</span>
+              <span>{t.noise.chartPanelTitle}</span>
             </h3>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -462,7 +492,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   className={`segmented-btn ${noiseAxisMode === 'raw_adu' ? 'is-active' : ''}`}
                   style={{ padding: '0.24rem 0.58rem', fontSize: '0.74rem' }}
                 >
-                  σ_ADU 原始读出噪声
+                  {t.noise.axisRawAduBtn}
                 </button>
                 <button
                   id="btn-axis-iso100-norm"
@@ -471,7 +501,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   className={`segmented-btn ${noiseAxisMode === 'iso100_norm' ? 'is-active' : ''}`}
                   style={{ padding: '0.24rem 0.58rem', fontSize: '0.74rem' }}
                 >
-                  ISO 100 等效输入底噪
+                  {t.noise.axisIso100Btn}
                 </button>
               </div>
 
@@ -479,8 +509,8 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               <div className="segmented-control">
                 {(
                   [
-                    ['mean', '均值'],
-                    ['all_channels', '四通道'],
+                    ['mean', t.noise.channelMean],
+                    ['all_channels', t.noise.channelAll],
                     ['R', 'R'],
                     ['G1', 'G1'],
                     ['G2', 'G2'],
@@ -510,7 +540,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                 viewBox={`0 0 ${chartGeom.W} ${chartGeom.H}`}
                 className="w-full h-auto select-none"
                 role="img"
-                aria-label="ISO 噪声与动态范围折线图"
+                aria-label={t.noise.svgAria}
               >
                 {/* Horizontal Subtle Reference Lines (Left Noise Log Ticks) */}
                 {chartGeom.noiseTicks.map((tv, idx) => {
@@ -581,7 +611,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         fontFamily="JetBrains Mono, monospace"
                         fill="hsl(214, 12%, 68%)"
                       >
-                        {iso > 0 ? iso : '未知'}
+                        {iso > 0 ? iso : t.noise.isoUnknownShort}
                       </text>
                     </g>
                   );
@@ -595,8 +625,8 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   fill="hsl(37, 88%, 62%)"
                 >
                   {noiseAxisMode === 'raw_adu'
-                    ? '← 左轴：读出噪声 σ_ADU (Log2 对数刻度)'
-                    : '← 左轴：ISO 100 等效输入噪声 ADU (Log2)'}
+                    ? t.noise.leftAxisRawTitle
+                    : t.noise.leftAxisNormTitle}
                 </text>
                 <text
                   x={chartGeom.W - chartGeom.padR}
@@ -605,7 +635,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   fontSize="11"
                   fill="hsl(152, 65%, 56%)"
                 >
-                  右轴：工程动态范围 Engineering DR (EV, 虚线) →
+                  {t.noise.rightAxisDrTitle}
                 </text>
                 <text
                   x={chartGeom.W / 2}
@@ -614,7 +644,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   fontSize="11"
                   fill="hsl(215, 10%, 50%)"
                 >
-                  感光度 ISO (Log2 等档距坐标)
+                  {t.noise.bottomAxisIsoTitle}
                 </text>
 
                 {/* Dual Native ISO HCG Inflection Vertical Callouts */}
@@ -834,7 +864,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             <div className="flex items-center justify-between border-b border-[var(--hairline-subtle)] pb-3">
               <div>
                 <div className="text-xs text-[var(--text-muted)]">
-                  单帧四通道详细遥测（点击图表节点切换）
+                  {t.noise.frameDetailHint}
                 </div>
                 <div className="text-sm font-semibold text-[var(--text-primary)] mono-num mt-0.5">
                   {formatIsoText(activeFrame.iso)} · {activeFrame.filename}
@@ -846,7 +876,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             </div>
 
             {/* Quality Alerts if Zero-Clipped, Light Leak, or Metadata/Thermal Notes */}
-            {activeFrame.qualityNotes.length > 0 && (
+            {localizedFrameNotes.length > 0 && (
               <div
                 className={`p-2.5 rounded-lg text-xs space-y-1 ${
                   activeFrame.isZeroClipped || activeFrame.suspectedLightLeak
@@ -856,9 +886,9 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               >
                 <div className="font-semibold flex items-center gap-1.5">
                   <AlertTriangle size={13} />
-                  <span>暗帧数据完整性提示</span>
+                  <span>{t.noise.integrityAlertTitle}</span>
                 </div>
-                {activeFrame.qualityNotes.map((note, idx) => (
+                {localizedFrameNotes.map((note, idx) => (
                   <p key={idx} className="leading-relaxed">
                     {note}
                   </p>
@@ -878,7 +908,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                       className="mono-num font-semibold"
                       style={{ color: CHANNEL_COLORS[ch.channel] }}
                     >
-                      {ch.channel} 通道
+                      {t.noise.channelCardTitle(ch.channel)}
                     </span>
                     <span className="mono-num text-[var(--text-muted)]">
                       DR {ch.engineeringDrEv.toFixed(2)} EV
@@ -891,14 +921,18 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-[var(--text-muted)]">ΔBL 偏移</span>
+                    <span className="text-[var(--text-muted)]">
+                      {t.noise.deltaBlLabel}
+                    </span>
                     <span className="mono-num text-[var(--text-secondary)]">
                       {ch.blackLevelOffset >= 0 ? '+' : ''}
                       {ch.blackLevelOffset.toFixed(2)} ADU
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-[var(--text-muted)]">热像素剔除</span>
+                    <span className="text-[var(--text-muted)]">
+                      {t.noise.hotPixelsRejectedLabel}
+                    </span>
                     <span className="mono-num text-[var(--text-secondary)]">
                       {ch.hotPixelCount} ({ch.hotPixelPpm.toFixed(1)} ppm)
                     </span>
@@ -912,10 +946,12 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               <div className="space-y-1.5 pt-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-[var(--text-secondary)] font-medium">
-                    G1 通道黑电平附近 ADU 高斯分布直方图
+                    {t.noise.g1HistTitle}
                   </span>
                   <span className="mono-num text-[var(--text-muted)]">
-                    标称 BL = {activeFrame.channels[1].nominalBlackLevel.toFixed(0)} ADU
+                    {t.noise.nominalBlLabel(
+                      activeFrame.channels[1].nominalBlackLevel.toFixed(0),
+                    )}
                   </span>
                 </div>
 
@@ -992,25 +1028,25 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       {/* Full Calibration Table */}
       <section className="instrument-panel overflow-hidden">
         <div className="panel-header">
-          <h3 className="panel-title">多档 ISO 传感器底噪与动态范围标定明细表</h3>
+          <h3 className="panel-title">{t.noise.tableTitle}</h3>
         </div>
         <div className="overflow-x-auto">
           <table className="calib-table mono-num">
             <thead>
               <tr>
-                <th>ISO</th>
-                <th>样张文件</th>
-                <th>标称黑电平</th>
-                <th>均值 ΔBL 偏移</th>
+                <th>{t.noise.colIso}</th>
+                <th>{t.noise.colFilename}</th>
+                <th>{t.noise.colNominalBl}</th>
+                <th>{t.noise.colMeanDeltaBl}</th>
                 <th>R σ_ADU</th>
                 <th>G1 σ_ADU</th>
                 <th>G2 σ_ADU</th>
                 <th>B σ_ADU</th>
-                <th>四通道均值 σ_ADU</th>
-                <th>ISO 100 归一化底噪</th>
-                <th>工程动态范围 (EV)</th>
-                <th>剔除 5σ 热像素</th>
-                <th>数据校验</th>
+                <th>{t.noise.colMeanSigma}</th>
+                <th>{t.noise.colIso100Norm}</th>
+                <th>{t.noise.colDrEv}</th>
+                <th>{t.noise.colHotPixels}</th>
+                <th>{t.noise.colValidation}</th>
               </tr>
             </thead>
             <tbody>
@@ -1057,15 +1093,15 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                     <td className="font-sans">
                       {f.isZeroClipped ? (
                         <span className="status-tag status-tag--crit">
-                          零点截断
+                          {t.noise.badgeZeroClipped}
                         </span>
                       ) : f.suspectedLightLeak ? (
                         <span className="status-tag status-tag--warn">
-                          疑似漏光
+                          {t.noise.badgeLightLeak}
                         </span>
                       ) : (
                         <span className="status-tag status-tag--pass">
-                          纯净暗帧
+                          {t.noise.badgeCleanDark}
                         </span>
                       )}
                     </td>

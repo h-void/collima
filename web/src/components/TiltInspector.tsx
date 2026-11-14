@@ -11,11 +11,12 @@ import {
 } from 'lucide-react';
 import type {
   ActiveTiltSessionData,
-  CellValidity,
   GridCellMetrics,
   OpticalGrade,
   PatchRenderModeCode,
 } from '../types/collima';
+import { localizeSharpnessReport } from '../i18n/diagnostics';
+import { useI18n } from '../i18n/useI18n';
 
 interface TiltInspectorProps {
   session: ActiveTiltSessionData;
@@ -27,37 +28,12 @@ interface TiltInspectorProps {
 
 type ZoomFactor = 1 | 2 | 4;
 
-const GRADE_META: Record<
-  OpticalGrade,
-  { badgeClass: string; labelZh: string }
-> = {
-  excellent: {
-    badgeClass: 'status-tag status-tag--pass',
-    labelZh: '光轴合焦优异',
-  },
-  normal_curvature: {
-    badgeClass: 'status-tag status-tag--pass',
-    labelZh: '光轴居中 · 正常对称场曲',
-  },
-  mild_tilt: {
-    badgeClass: 'status-tag status-tag--warn',
-    labelZh: '轻度单侧偏心 / 倾角',
-  },
-  severe_tilt: {
-    badgeClass: 'status-tag status-tag--crit',
-    labelZh: '显著焦平面倾斜 (Tilt)',
-  },
-  insufficient_texture: {
-    badgeClass: 'status-tag status-tag--warn',
-    labelZh: '局部高频纹理不足',
-  },
-};
-
-const VALIDITY_LABEL: Record<CellValidity, string> = {
-  valid: '有效纹理',
-  low_texture: '低反差/纯色',
-  underexposed: '欠曝信噪比低',
-  clipped: '高光溢出',
+const GRADE_BADGE_CLASS: Record<OpticalGrade, string> = {
+  excellent: 'status-tag status-tag--pass',
+  normal_curvature: 'status-tag status-tag--pass',
+  mild_tilt: 'status-tag status-tag--warn',
+  severe_tilt: 'status-tag status-tag--crit',
+  insufficient_texture: 'status-tag status-tag--warn',
 };
 
 /** Map normalized relative sharpness [0..1.15] to calibrated thermal RGBA (obsidian -> teal -> optical green -> amber -> ivory). */
@@ -95,6 +71,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
   onRelocateStation,
   onResetStations,
 }) => {
+  const { locale, t } = useI18n();
   const [zoom, setZoom] = useState<ZoomFactor>(2);
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
   const [showReticle, setShowReticle] = useState<boolean>(true);
@@ -527,7 +504,11 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
   };
 
   const { sharpness } = session;
-  const gradeInfo = GRADE_META[sharpness.grade];
+  const localizedDiag = useMemo(
+    () => localizeSharpnessReport(sharpness, session.metadata, locale),
+    [sharpness, session.metadata, locale],
+  );
+  const gradeBadgeClass = GRADE_BADGE_CLASS[sharpness.grade];
   const tv = sharpness.tiltVector;
   const centerIsValid =
     sharpness.grid3x3[4]?.validity === 'valid' &&
@@ -549,16 +530,18 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     <div className="max-w-[1680px] mx-auto w-full px-4 py-4 grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
       {/* Left / Primary Column: 9-Grid Synchronized 1:1 Sensor Loupe Workbench */}
       <section
-        aria-label="九宫格 1:1 像素同步检视台"
+        aria-label={t.tilt.sectionLoupeAria}
         className="xl:col-span-8 instrument-panel overflow-hidden"
       >
         <div className="panel-header">
           <div className="flex items-center gap-2.5 flex-wrap">
             <h2 className="panel-title">
               <Crosshair size={15} className="text-[var(--accent-amber)]" />
-              <span>九宫格 1:1 传感器像素同步放大检视台</span>
+              <span>{t.tilt.loupePanelTitle}</span>
             </h2>
-            <span className={gradeInfo.badgeClass}>{gradeInfo.labelZh}</span>
+            <span className={gradeBadgeClass}>
+              {t.tilt.grades[sharpness.grade]}
+            </span>
           </div>
 
           {/* Loupe Toolbar */}
@@ -567,7 +550,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
             <div
               className="segmented-control"
               role="group"
-              aria-label="最近邻放大倍率"
+              aria-label={t.tilt.zoomGroupAria}
             >
               {([1, 2, 4] as ZoomFactor[]).map((z) => (
                 <button
@@ -591,7 +574,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
             <div
               className="segmented-control"
               role="group"
-              aria-label="视口拖拽模式"
+              aria-label={t.tilt.dragModeGroupAria}
             >
               <button
                 id="btn-drag-mode-pan"
@@ -599,10 +582,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 onClick={() => setDragMode('sync_pan')}
                 className={`segmented-btn ${dragMode === 'sync_pan' ? 'is-active' : ''}`}
                 style={{ padding: '0.26rem 0.6rem', fontSize: '0.75rem' }}
-                title="拖拽任意视口可 9 窗同步微移观察像素细节"
+                title={t.tilt.dragSyncPanTitle}
               >
                 <Eye size={12} />
-                <span>同步平移</span>
+                <span>{t.tilt.dragSyncPan}</span>
               </button>
               <button
                 id="btn-drag-mode-relocate"
@@ -610,10 +593,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 onClick={() => setDragMode('relocate_roi')}
                 className={`segmented-btn ${dragMode === 'relocate_roi' ? 'is-active' : ''}`}
                 style={{ padding: '0.26rem 0.6rem', fontSize: '0.75rem' }}
-                title="单独微调某个视口的采样坐标（如避开纯色天空对准砖缝或星点）并实时重算锐度"
+                title={t.tilt.dragRelocateRoiTitle}
               >
                 <Move size={12} />
-                <span>微调采样点</span>
+                <span>{t.tilt.dragRelocateRoi}</span>
               </button>
             </div>
 
@@ -624,7 +607,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               className="btn-instrument"
               style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
             >
-              十字丝 {showReticle ? '开' : '关'}
+              {t.tilt.reticleToggle(showReticle)}
             </button>
 
             <button
@@ -637,10 +620,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               }}
               className="btn-instrument"
               style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
-              title="复位九宫格标准采样坐标与平移偏移"
+              title={t.tilt.resetStationsTitle}
             >
               <RotateCcw size={12} />
-              <span>复位采样</span>
+              <span>{t.tilt.resetStations}</span>
             </button>
           </div>
         </div>
@@ -648,14 +631,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         {/* Signal Path & Exposure Controls Strip */}
         <div className="px-4 py-2.5 bg-[var(--bg-surface-1)] border-b border-[var(--hairline-subtle)] flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[var(--text-muted)]">像素渲染通道：</span>
-            {(
-              [
-                [0, '1:1 色彩解马赛克 (sRGB)'],
-                [1, '去马赛克前纯绿通道 (规避倍率色差)'],
-                [2, '原始拜耳 CFA 阵列'],
-              ] as [PatchRenderModeCode, string][]
-            ).map(([code, label]) => (
+            <span className="text-[var(--text-muted)]">
+              {t.tilt.renderChannelLabel}
+            </span>
+            {([0, 1, 2] as PatchRenderModeCode[]).map((code) => (
               <button
                 key={code}
                 id={`btn-patch-mode-${code}`}
@@ -669,7 +648,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 }`}
                 style={{ padding: '0.24rem 0.58rem', fontSize: '0.74rem' }}
               >
-                {label}
+                {t.tilt.patchModes[code]}
               </button>
             ))}
           </div>
@@ -677,7 +656,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           <div className="flex items-center gap-2.5">
             <Sliders size={13} className="text-[var(--text-muted)]" />
             <label htmlFor="slider-ev-boost" className="text-[var(--text-secondary)]">
-              检视提亮
+              {t.tilt.evBoostLabel}
             </label>
             <input
               id="slider-ev-boost"
@@ -763,13 +742,15 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   >
                     {isCenter
                       ? cell.validity === 'valid'
-                        ? '100% 中心基准'
-                        : `中心·${VALIDITY_LABEL[cell.validity]}`
+                        ? t.tilt.hudCenterRef
+                        : t.tilt.hudCenterInvalid(
+                            t.tilt.validities[cell.validity],
+                          )
                       : cell.validity !== 'valid'
-                        ? VALIDITY_LABEL[cell.validity]
+                        ? t.tilt.validities[cell.validity]
                         : !centerIsValid
-                          ? '基准无效'
-                          : `保持率 ${retPct}%`}
+                          ? t.tilt.hudInvalidRef
+                          : t.tilt.hudRetention(retPct)}
                   </span>
                 </div>
 
@@ -786,12 +767,8 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         </div>
 
         <div className="px-4 pb-3 text-[11px] text-[var(--text-muted)] flex flex-wrap items-center justify-between gap-2">
-          <span>
-            操作提示：200% / 400% 下拖拽画面可九窗同步比对边缘劣化；按住 Shift 拖拽（或切换至「微调采样点」/ 点击右侧缩略图）可单独移动局部采样框避开纯色区域。
-          </span>
-          <span className="mono-num">
-            最近邻无插值放大 (imageSmoothingEnabled = false)
-          </span>
+          <span>{t.tilt.loupeHint}</span>
+          <span className="mono-num">{t.tilt.nearestNeighborBadge}</span>
         </div>
       </section>
 
@@ -799,13 +776,13 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
       <aside className="xl:col-span-4 flex flex-col gap-4">
         {/* Overview Canvas + 5x5 Sharpness Contour Heatmap */}
         <section
-          aria-label="全画幅缩略图与 5x5 锐度等高线热力图"
+          aria-label={t.tilt.overviewSectionAria}
           className="instrument-panel overflow-hidden"
         >
           <div className="panel-header">
             <h3 className="panel-title">
               <Flame size={15} className="text-[var(--accent-amber)]" />
-              <span>全画幅场曲 / 光轴等高线热力图 (5×5)</span>
+              <span>{t.tilt.overviewTitle}</span>
             </h3>
             <button
               id="btn-toggle-heatmap"
@@ -818,7 +795,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               }`}
               style={{ padding: '0.26rem 0.62rem', fontSize: '0.74rem' }}
             >
-              {showHeatmap ? '隐藏热力图' : '叠加 5×5 热力图'}
+              {showHeatmap ? t.tilt.btnHideHeatmap : t.tilt.btnShowHeatmap}
             </button>
           </div>
 
@@ -836,7 +813,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
 
             {/* Heatmap Color Scale Legend */}
             <div className="mt-2.5 flex items-center justify-between text-[11px] text-[var(--text-muted)] mono-num">
-              <span>塌陷 &lt;30%</span>
+              <span>{t.tilt.legendCollapse}</span>
               <div
                 className="h-2 flex-1 mx-3 rounded-full"
                 style={{
@@ -844,21 +821,23 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                     'linear-gradient(90deg, rgb(180,42,58) 0%, rgb(225,90,48) 35%, rgb(70,198,116) 72%, rgb(52,230,140) 100%)',
                 }}
               />
-              <span>中心峰值 100%</span>
+              <span>{t.tilt.legendCenterPeak}</span>
             </div>
           </div>
         </section>
 
         {/* Optical Collimation & Tilt Vector Telemetry */}
         <section
-          aria-label="光轴倾斜向量与四角保持率指标"
+          aria-label={t.tilt.collimationSectionAria}
           className="instrument-panel p-4 space-y-4"
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs text-[var(--text-muted)]">光学诊断结论</div>
+              <div className="text-xs text-[var(--text-muted)]">
+                {t.tilt.verdictHeader}
+              </div>
               <div className="text-sm font-semibold text-[var(--text-primary)] mt-0.5">
-                {sharpness.verdictTitle}
+                {localizedDiag.verdictTitle}
               </div>
             </div>
             <Compass size={18} className="text-[var(--accent-amber)] shrink-0" />
@@ -871,7 +850,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 width="120"
                 height="120"
                 viewBox="0 0 120 120"
-                aria-label="焦平面倾斜极坐标罗盘"
+                aria-label={t.tilt.compassAria}
               >
                 <circle
                   cx="60"
@@ -919,7 +898,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   fontSize="8"
                   fill="hsl(215, 10%, 52%)"
                 >
-                  TOP
+                  {t.tilt.compassTop}
                 </text>
                 <text
                   x="60"
@@ -928,7 +907,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   fontSize="8"
                   fill="hsl(215, 10%, 52%)"
                 >
-                  BTM
+                  {t.tilt.compassBottom}
                 </text>
 
                 {/* Collapse Direction Vector */}
@@ -965,31 +944,41 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
 
             <div className="col-span-7 space-y-1.5 text-xs">
               <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">Tilt 偏移模长</span>
+                <span className="text-[var(--text-muted)]">
+                  {t.tilt.metricTiltMag}
+                </span>
                 <span className="mono-num font-semibold text-[var(--text-primary)]">
                   {tv.magnitude.toFixed(3)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">劣化塌陷方位</span>
+                <span className="text-[var(--text-muted)]">
+                  {t.tilt.metricCollapseDir}
+                </span>
                 <span className="mono-num text-[var(--accent-amber)]">
-                  {tv.collapseDirectionLabel}
+                  {localizedDiag.collapseDirectionLabel}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">塌陷方位角</span>
+                <span className="text-[var(--text-muted)]">
+                  {t.tilt.metricCollapseAngle}
+                </span>
                 <span className="mono-num text-[var(--text-secondary)]">
                   {tv.collapseAngleDeg.toFixed(1)}°
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">径向对称场曲项</span>
+                <span className="text-[var(--text-muted)]">
+                  {t.tilt.metricRadialFalloff}
+                </span>
                 <span className="mono-num text-[var(--text-secondary)]">
                   {sharpness.radialFalloff.toFixed(3)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[var(--text-muted)]">中心绿通道锐度</span>
+                <span className="text-[var(--text-muted)]">
+                  {t.tilt.metricCenterSharpness}
+                </span>
                 <span className="mono-num text-[var(--optical-green)]">
                   {sharpness.centerSharpness.toFixed(4)}
                 </span>
@@ -1001,22 +990,24 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           <div className="space-y-2.5">
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium text-[var(--text-secondary)]">
-                四角相对中心锐度保持率 (Corner Retention)
+                {t.tilt.cornerRetentionTitle}
               </span>
               <span className="mono-num text-[var(--text-primary)]">
-                均值 {(sharpness.cornerRetention.mean * 100).toFixed(1)}%
+                {t.tilt.cornerMean(
+                  (sharpness.cornerRetention.mean * 100).toFixed(1),
+                )}
               </span>
             </div>
 
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
-                  ['左上 TL', sharpness.cornerRetention.tl],
-                  ['右上 TR', sharpness.cornerRetention.tr],
-                  ['左下 BL', sharpness.cornerRetention.bl],
-                  ['右下 BR', sharpness.cornerRetention.br],
-                ] as [string, number][]
-              ).map(([label, val]) => {
+                  ['tl', t.tilt.cornerLabels.tl, sharpness.cornerRetention.tl],
+                  ['tr', t.tilt.cornerLabels.tr, sharpness.cornerRetention.tr],
+                  ['bl', t.tilt.cornerLabels.bl, sharpness.cornerRetention.bl],
+                  ['br', t.tilt.cornerLabels.br, sharpness.cornerRetention.br],
+                ] as const
+              ).map(([key, label, val]) => {
                 const pct = Math.min(120, Math.max(0, val * 100));
                 const barColor =
                   val >= 0.72
@@ -1026,7 +1017,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                       : 'var(--alert-coral)';
                 return (
                   <div
-                    key={label}
+                    key={key}
                     className="p-2 rounded-md bg-[var(--bg-surface-1)] border border-[var(--hairline-subtle)] space-y-1"
                   >
                     <div className="flex justify-between text-xs">
@@ -1051,13 +1042,17 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
 
             <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
               <div className="p-2 rounded-md bg-[var(--bg-surface-1)] border border-[var(--hairline-subtle)] flex justify-between">
-                <span className="text-[var(--text-muted)]">|TL - BR| 对角差</span>
+                <span className="text-[var(--text-muted)]">
+                  {t.tilt.diagDiffTlBr}
+                </span>
                 <span className="mono-num text-[var(--text-primary)]">
                   {(sharpness.asymmetry.tlBrDiff * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="p-2 rounded-md bg-[var(--bg-surface-1)] border border-[var(--hairline-subtle)] flex justify-between">
-                <span className="text-[var(--text-muted)]">|TR - BL| 对角差</span>
+                <span className="text-[var(--text-muted)]">
+                  {t.tilt.diagDiffTrBl}
+                </span>
                 <span className="mono-num text-[var(--text-primary)]">
                   {(sharpness.asymmetry.trBlDiff * 100).toFixed(1)}%
                 </span>
@@ -1066,9 +1061,9 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           </div>
 
           {/* Diagnostic Notes */}
-          {sharpness.notes.length > 0 && (
+          {localizedDiag.notes.length > 0 && (
             <ul className="space-y-1.5 text-xs text-[var(--text-secondary)] border-t border-[var(--hairline-subtle)] pt-3 list-disc pl-4">
-              {sharpness.notes.map((n, i) => (
+              {localizedDiag.notes.map((n, i) => (
                 <li key={i} className="leading-relaxed">
                   {n}
                 </li>
