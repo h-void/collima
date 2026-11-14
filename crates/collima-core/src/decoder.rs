@@ -3,10 +3,10 @@
 //! Combines:
 //! 1. `ticoraw` for Nikon High Efficiency (`HE` / `HE*`) `.NEF` codestreams (intoPIX TicoRAW /
 //!    N-RAW JPEG XS wavelet compression on Z9, Z8, Zf, Z6III, Z5II, Z50II, ZR).
-//! 2. `flashraw` for ~40 RAW formats including Sony `ARW6` (latest video-RAW-derived compressed /
-//!    compressed HQ wavelet codec), Sony Lossless ARW, Canon `CR3` (CRX + C-RAW) & `CR2`, classic
-//!    Nikon `NEF`, `DNG` (incl. JPEG XL DNG 1.7), Fujifilm `RAF`, Panasonic/Leica `RW2`/`RWL`,
-//!    Olympus `ORF`, and Pentax `PEF`.
+//! 2. `flashraw` for ~40 RAW formats including Sony `X-OCN / LLVC3` (`ARW 6.0` Compressed /
+//!    Compressed HQ 5/3 wavelet codec on α7 V / α7R VI), Sony Lossless ARW, Canon `CR3` (CRX +
+//!    C-RAW) & `CR2`, classic Nikon `NEF`, `DNG` (incl. JPEG XL DNG 1.7), Fujifilm `RAF`,
+//!    Panasonic/Leica `RW2`/`RWL`, Olympus `ORF`, and Pentax `PEF`.
 
 use flashraw::{
     Backend, CfaColor, CorruptionPolicy, DecodeOptions, FlashRaw, FrameSource, OutputFormat,
@@ -581,20 +581,31 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         .format
         .map(|f| format!("{f:?}").to_uppercase())
         .unwrap_or_else(|| "RAW".to_string());
-    let compression_name = fm
+    let raw_compression = fm
         .compression
         .map(|c| format!("{c:?}"))
         .unwrap_or_else(|| "Uncompressed".to_string());
 
-    // Highlight Sony ARW6 or lossy codecs in warnings for transparency.
-    if compression_name.to_ascii_lowercase().contains("arw6")
-        || fm
-            .extra
-            .iter()
-            .any(|(_, v)| v.to_ascii_lowercase().contains("arw6"))
-    {
+    // flashraw maps Sony TIFF Compression 32766 (ARW 6.0 Compressed / Compressed HQ, i.e. Sony
+    // CineAlta X-OCN / LLVC3 5/3 wavelet + 12->16-bit LLVC3_CURVE [BL=1024, WL=39002]) to `Other`.
+    let is_sony_xocn = (format_name == "ARW" || fm.make.eq_ignore_ascii_case("Sony"))
+        && (raw_compression == "Other"
+            || (white_levels[0] - 39002.0).abs() < 1.0
+            || raw_compression.to_ascii_lowercase().contains("arw6")
+            || fm
+                .extra
+                .iter()
+                .any(|(_, v)| v.to_ascii_lowercase().contains("arw6")));
+
+    let compression_name = if is_sony_xocn {
+        "X-OCN / LLVC3 (ARW 6.0)".to_string()
+    } else {
+        raw_compression
+    };
+
+    if is_sony_xocn {
         warnings.push(
-            "Decoded Sony ARW6 wavelet-compressed stream (latest video-RAW-derived codec)."
+            "检测到索尼 X-OCN / LLVC3 (ARW 6.0 已压缩 / 已压缩 HQ) 5/3 小波编码流：解码像素已经过 12→16-bit LLVC3 曲线线性化映射（BL=1024, WL=39002），EV 动态范围具备尺度不变性，但 σ_ADU 处于 LLVC3 线性域而非传感器原始 14-bit ADC 码值域。"
                 .to_string(),
         );
     }

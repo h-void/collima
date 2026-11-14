@@ -33,7 +33,7 @@
 
 | 解码引擎 | 覆盖相机与压缩编码格式 |
 | --- | --- |
-| **`flashraw 0.2`** | 覆盖约 40 种相机 RAW 格式：原生支持 **索尼最新 `ARW6` 波小波压缩**（源自视频 RAW 架构的新一代有损/高质量压缩 ARW，如 Alpha 最新机型）、索尼无损压缩 ARW (`L/M/S`)、佳能 `.CR3` (`CRX` 无损与 `C-RAW`) / `.CR2`、传统尼康 `.NEF`（未压缩 / 无损 / 传统有损）、Adobe `.DNG`（含 DNG 1.7 JPEG XL 压缩）、富士 `.RAF`（含 X-Trans 6×6）、松下/徕卡 `.RW2` / `.RWL`、奥林巴斯/OM `.ORF`、宾得 `.PEF`、哈苏 `.3FR`、飞思 `.IIQ`。 |
+| **`flashraw 0.2`** | 覆盖约 40 种相机 RAW 格式：原生支持 **索尼 `ARW 6.0` 容器下的 `X-OCN / LLVC3` 5/3 小波压缩**（即 α7 V `ILCE-7M5` / α7R VI `ILCE-7RM6` 下放自 CineAlta 电影机的「已压缩 HQ / 新已压缩」编码）、索尼无损压缩 ARW (`L/M/S`)、佳能 `.CR3` (`CRX` 无损与 `C-RAW`) / `.CR2`、传统尼康 `.NEF`（未压缩 / 无损 / 传统有损）、Adobe `.DNG`（含 DNG 1.7 JPEG XL 压缩）、富士 `.RAF`（含 X-Trans 6×6）、松下/徕卡 `.RW2` / `.RWL`、奥林巴斯/OM `.ORF`、宾得 `.PEF`、哈苏 `.3FR`、飞思 `.IIQ`。 |
 | **`ticoraw 0.2`** | 专为 **尼康高效率压缩 `.NEF`（High Efficiency `HE` 与 `HE*`）** 打造的纯 Rust 洁净室位精确解码器，完整解析尼康 Z9、Z8、Zf、Z6III、Z5II、Z50II、ZR 等机型源自 intoPIX TicoRAW / N-RAW 的 JPEG XS 亚像素小波码流，并自动融合 `flashraw` 提取的镜头与曝光 EXIF 元数据。 |
 
 ---

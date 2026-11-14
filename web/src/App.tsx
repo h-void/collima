@@ -479,7 +479,7 @@ export const App: React.FC = () => {
       </main>
 
       <footer className="border-t border-[var(--hairline-subtle)] py-3 px-4 text-center text-[11px] text-[var(--text-muted)]">
-        collima Optical &amp; Sensor Metrology Workbench · Rust + WebAssembly (flashraw ARW6 / CR3 / DNG + ticoraw Nikon HE/HE*) · 所有原始图像字节流仅在浏览器本地沙箱内存运算
+        collima Optical &amp; Sensor Metrology Workbench · Rust + WebAssembly (flashraw Sony X-OCN [ARW 6.0] / CR3 / DNG + ticoraw Nikon HE/HE*) · 所有原始图像字节流仅在浏览器本地沙箱内存运算
       </footer>
     </div>
   );

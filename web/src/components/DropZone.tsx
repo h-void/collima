@@ -175,7 +175,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-            <span className="status-tag">Sony .ARW (含最新 ARW6 波小波压缩)</span>
+            <span className="status-tag">Sony .ARW (含 A7M5/A7R6 X-OCN 已压缩 HQ · ARW 6.0)</span>
             <span className="status-tag">Nikon .NEF (含 Z9/Z8/Z6III/ZR HE &amp; HE* TicoRAW)</span>
             <span className="status-tag">Canon .CR3 / .CR2</span>
             <span className="status-tag">Adobe .DNG (含 JXL)</span>
