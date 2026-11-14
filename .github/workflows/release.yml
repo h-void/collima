@@ -88,7 +88,7 @@ jobs:
           VER="${{ steps.meta.outputs.version }}"
           mkdir -p staging/collima-web release-assets
           cp -r web/dist/* staging/collima-web/
-          cp LICENSE staging/collima-web/
+          cp LICENSE LICENSE-APACHE THIRD-PARTY-NOTICES.md staging/collima-web/
           cat > staging/collima-web/OFFLINE_USAGE.txt <<'EOF'
           collima — Standalone Offline Web + WebAssembly Bundle
           =====================================================

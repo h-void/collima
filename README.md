@@ -13,7 +13,7 @@
 - **去马赛克前独立双绿通道测量**：直接在原始拜耳阵列的 $G_1$ 与 $G_2$ 独立子平面上分别计算梯度并取均值，既规避广角镜头边缘横向色差（倍率色散）造成的伪边缘对比度，又避免将 $G_1/G_2$ 斜向合并导致的 45° 高频细节衰减。
 - **消除暗角干扰的黑电平校准归一化 Tenengrad 算子**：
 
-  $$\displaystyle S _ {G_k} = \frac{1}{N \cdot (\mu _ {G_k} - \text{BL} _ {G_k})^2} \sum _ {(x,y)} \max\negthinspace\left(0,\thickspace G_x^2 + G_y^2 - \tau _ {\text{noise}}^2\right)$$
+  $$\displaystyle S _ {G_k} = \frac{1}{N \cdot (\mu _ {G_k} - \text{BL} _ {G_k})^2} \sum _ {(x,y)} \max\left(0, G_x^2 + G_y^2 - \tau _ {\text{noise}}^2\right)$$
 
   显式扣除通道标称黑电平 $\text{BL} _ {G_k}$ 并施加局部底噪门限 $\tau _ {\text{noise}}$，防止镜头边缘暗角（Vignetting）因仅衰减光信号而不衰减固定黑电平偏置（如索尼 512 / 佳能 2048 ADU）所引发的系统性边缘锐度低估。
 - **场曲 vs 光轴倾斜（Tilt）解耦与星野 HFR 检测**：采用加权最小二乘（WLS）拟合一阶倾斜平面与二阶径向对称衰减项，自动区分「大光圈正常对称场曲」与「卡口法兰/转接环/镜组偏心导致的单侧塌陷」，并内置点光源半通量半径（Star HFR）估算。
@@ -43,8 +43,8 @@
 
 | 解码引擎 | 覆盖相机与压缩编码格式 |
 | --- | --- |
-| **`flashraw 0.2`** | 覆盖约 40 种相机 RAW 格式：原生支持 **索尼 `ARW 6.0` 容器下的 `X-OCN / LLVC3` 5/3 小波压缩**（即 α7 V `ILCE-7M5` / α7R VI `ILCE-7RM6` 下放自 CineAlta 电影机的「已压缩 HQ / 新已压缩」编码）、索尼无损压缩 ARW (`L/M/S`)、佳能 `.CR3` (`CRX` 无损与 `C-RAW`) / `.CR2`、传统尼康 `.NEF`（未压缩 / 无损 / 传统有损）、Adobe `.DNG`（含 DNG 1.7 JPEG XL 压缩）、富士 `.RAF`（含 X-Trans 6×6）、松下/徕卡 `.RW2` / `.RWL`、奥林巴斯/OM `.ORF`、宾得 `.PEF`、哈苏 `.3FR`、飞思 `.IIQ`。 |
-| **`ticoraw 0.2`** | 专为 **尼康高效率压缩 `.NEF`（High Efficiency `HE` 与 `HE*`）** 打造的纯 Rust 洁净室位精确解码器，完整解析尼康 Z9、Z8、Zf、Z6III、Z5II、Z50II、ZR 等机型源自 intoPIX TicoRAW / N-RAW 的 JPEG XS 亚像素小波码流，并自动融合 `flashraw` 提取的镜头与曝光 EXIF 元数据。 |
+| [`flashraw 0.2`](https://github.com/ybouane/flashraw) | 覆盖约 40 种相机 RAW 格式：原生支持 **索尼 `ARW 6.0` 容器下的 `X-OCN / LLVC3` 5/3 小波压缩**（即 α7 V `ILCE-7M5` / α7R VI `ILCE-7RM6` 下放自 CineAlta 电影机的「已压缩 HQ / 新已压缩」编码）、索尼无损压缩 ARW (`L/M/S`)、佳能 `.CR3` (`CRX` 无损与 `C-RAW`) / `.CR2`、传统尼康 `.NEF`（未压缩 / 无损 / 传统有损）、Adobe `.DNG`（含 DNG 1.7 JPEG XL 压缩）、富士 `.RAF`（含 X-Trans 6×6）、松下/徕卡 `.RW2` / `.RWL`、奥林巴斯/OM `.ORF`、宾得 `.PEF`、哈苏 `.3FR`、飞思 `.IIQ`。 |
+| [`ticoraw 0.2`](https://github.com/lukaj99/ticoraw) | 专为 **尼康高效率压缩 `.NEF`（High Efficiency `HE` 与 `HE*`）** 打造的纯 Rust 洁净室位精确解码器，完整解析尼康 Z9、Z8、Zf、Z6III、Z5II、Z50II、ZR 等机型源自 intoPIX TicoRAW / N-RAW 的 JPEG XS 亚像素小波码流，并自动融合 `flashraw` 提取的镜头与曝光 EXIF 元数据。 |
 
 ---
 
@@ -121,6 +121,20 @@ npm run tauri:build   # 打包当前系统安装包 (.exe/.msi, .dmg, .deb/.rpm/
 
 ---
 
+## 致谢与开源依赖声明
+
+`collima` 的光学倾斜/场曲解耦算法、去马赛克前双绿通道校准 Tenengrad、65,536 桶暗帧底噪与双原生 ISO 拐点检测引擎、14-bit `.DNG` 物理合成标定器及九宫格 1:1 交互工作台均为独立原创实现（并非复刻或改写自其他同类工具）。底层跨品牌 RAW 原始流解码与跨平台运行时基于以下优秀开源项目构建，特此向原作者与维护者们致以诚挚感谢：
+
+- **[@ybouane](https://github.com/ybouane) — [`ybouane/flashraw`](https://github.com/ybouane/flashraw)** (`MIT OR Apache-2.0`, `Copyright (c) 2026 Yassine Bouanane and FlashRaw contributors`)
+  - 提供约 40 种相机 RAW 格式的纯 Rust 内存安全解码引擎（含索尼 `ARW 6.0` `X-OCN / LLVC3`、佳能 `CR3`、Adobe `DNG 1.7`、富士 `RAF` 等）及相机色彩矩阵校准数据库。
+- **[@lukaj99](https://github.com/lukaj99) — [`lukaj99/ticoraw`](https://github.com/lukaj99/ticoraw)** (`MIT OR Apache-2.0`, `Copyright (c) 2026 Luka Jovanovic`)
+  - 提供尼康高效率压缩 `.NEF`（High Efficiency `HE` / `HE*`，intoPIX TicoRAW / JPEG XS）的纯 Rust 洁净室位精确解码器。
+- **核心生态与底层组件**：[`tirr-c/jxl-oxide`](https://github.com/tirr-c/jxl-oxide) (`MIT OR Apache-2.0`, DNG 1.7 JPEG XL 解码)、[`etemesi254/zune-image`](https://github.com/etemesi254/zune-image) (`MIT OR Apache-2.0 OR Zlib`)、[`rustwasm/wasm-bindgen`](https://github.com/rustwasm/wasm-bindgen) (`MIT OR Apache-2.0`)、[`tauri-apps/tauri`](https://github.com/tauri-apps/tauri) (`MIT OR Apache-2.0`)、[`facebook/react`](https://github.com/facebook/react) (`MIT`) 与 [`lucide-icons/lucide`](https://github.com/lucide-icons/lucide) (`ISC`)。
+
+完整的第三方开源组件版权声明与许可证文本见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)。
+
+---
+
 ## License
 
-Dual-licensed under **MIT** or **Apache-2.0**.
+Dual-licensed under **[MIT](./LICENSE)** or **[Apache-2.0](./LICENSE-APACHE)**, at your option.
