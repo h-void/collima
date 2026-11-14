@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Test Core & Build Web (WASM + Vite)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack & wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack,wasm-bindgen-cli@0.2.130
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Run Rust optical & sensor unit tests
+        run: cargo test --workspace
+
+      - name: Build WASM, lint, and bundle frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build:wasm
+          npm run lint
+          npm run build

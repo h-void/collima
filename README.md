@@ -1,6 +1,9 @@
-# `collima` — 浏览器端相机传感器与镜头光轴光学诊断工作台
+# `collima` — 相机传感器与镜头光轴光学诊断工作台
 
-**`collima`** 是一个纯本地运行的浏览器端相机与镜头光学诊断工作台。底层基于 **Rust + WebAssembly** 实现纯内存（零 `std::fs` 依赖）RAW 原始字节流解码与拜耳像素统计，前端基于 **React + Web Worker + HTML5 Canvas** 提供零延迟的 1:1 像素级视觉检视。所有测试样张均在本地浏览器沙箱内存中解析，无需上传任何服务器。
+**`collima`** 是一个纯本地运行的跨平台相机与镜头光学诊断工作台（支持 **Web 浏览器在线即开即用** 与 **Tauri v2 原生桌面端**）。底层基于 **Rust + WebAssembly** 实现纯内存（零云端上传）RAW 原始字节流解码与拜耳像素统计，前端基于 **React + Web Worker + HTML5 Canvas** 提供零延迟的 1:1 像素级视觉检视。
+
+- 🌐 **在线体验（GitHub Pages）**：<https://h-void.github.io/collima/>
+- 📦 **全平台桌面端与离线包下载（Windows x64/ARM64 · macOS Apple Silicon/Intel · Linux x64/ARM64）**：[GitHub Releases](https://github.com/h-void/collima/releases)
 
 ---
 
@@ -57,7 +60,11 @@ collima/
 │           ├── sharpness.rs          # 黑电平校准 G1/G2 Tenengrad、星点 HFR 与 WLS Tilt 向量解耦
 │           ├── noise.rs              # 65536 桶精确直方图、5σ 热像素剔除与双原生 ISO 拐点检测
 │           └── synthetic.rs          # 内置 14-bit 未压缩 RGGB .DNG 物理标定样张生成器
-└── web/                              # React + TypeScript + Vite 浏览器端交互工作台
+├── src-tauri/                        # Tauri v2 原生桌面端外壳 (Windows / macOS / Linux)
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   └── src/lib.rs                    # 原生系统保存对话框导出等桌面端命令桥接
+└── web/                              # React + TypeScript + Vite 交互工作台
     ├── package.json
     ├── vite.config.ts
     └── src/
@@ -77,13 +84,14 @@ collima/
 ### 环境依赖
 - **Rust** (`>= 1.85`, 含 `wasm32-unknown-unknown` target) 与 **`wasm-pack`**
 - **Node.js** (`>= 20`) 与 `npm`
+- *(可选：构建桌面端安装包时)* [Tauri v2 系统依赖](https://v2.tauri.app/start/prerequisites/)（macOS 需 Xcode CLT，Windows 需 MSVC Build Tools + WebView2，Ubuntu/Debian 需 `libwebkit2gtk-4.1-dev` 等）
 
 ### 1. 运行底层 Rust 单元与集成测试
 ```bash
 cargo test --workspace
 ```
 
-### 2. 编译 WebAssembly 核心包并启动前端工作台
+### 2. 编译 WebAssembly 核心包并启动浏览器工作台
 ```bash
 cd web
 npm install
@@ -91,11 +99,20 @@ npm run build:wasm
 npm run dev
 ```
 
-### 3. 构建生产环境静态包
+### 3. 构建生产环境 Web 静态包
 ```bash
 cd web
 npm run build
 ```
+
+### 4. 启动或打包 Tauri v2 原生桌面端
+```bash
+cd web
+npm run tauri:dev     # 启动原生桌面调试窗口
+npm run tauri:build   # 打包当前系统安装包 (.exe/.msi, .dmg, .deb/.rpm/.AppImage)
+```
+
+> **macOS 桌面端首次启动说明**：GitHub Releases 中的 macOS 安装包采用开源构建 Ad-hoc 签名（未接入付费 Apple 公证）。若首次打开提示「已损坏」或「无法验证开发者」，将 `collima.app` 拖入 `/Applications` 后在终端执行一次 `xattr -cr /Applications/collima.app` 即可正常打开。
 
 ---
 

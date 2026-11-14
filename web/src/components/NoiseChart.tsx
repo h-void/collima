@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   AlertTriangle,
   BarChart3,
@@ -75,7 +76,7 @@ function getFrameChannelDr(
   return Number.isFinite(val) ? val : 0;
 }
 
-function triggerDownload(filename: string, mime: string, content: string) {
+function triggerBrowserDownload(filename: string, mime: string, content: string) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -84,7 +85,20 @@ function triggerDownload(filename: string, mime: string, content: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+function triggerDownload(filename: string, mime: string, content: string) {
+  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+    void invoke<boolean>('save_export_file', {
+      defaultName: filename,
+      content,
+    }).catch(() => {
+      triggerBrowserDownload(filename, mime, content);
+    });
+    return;
+  }
+  triggerBrowserDownload(filename, mime, content);
 }
 
 export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {

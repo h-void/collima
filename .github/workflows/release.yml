@@ -1,0 +1,354 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional release tag (e.g. v0.1.0). Leave empty for build-only verification.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-web:
+    name: Test Core & Build Web/WASM Bundle
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Resolve version metadata
+        id: meta
+        run: |
+          CONF_VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            REL_TAG="${GITHUB_REF#refs/tags/}"
+            VER="${REL_TAG#v}"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            REL_TAG="${{ inputs.tag }}"
+            REL_TAG="v${REL_TAG#v}"
+            VER="${REL_TAG#v}"
+          else
+            REL_TAG=""
+            VER="${CONF_VER}"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${REL_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VER}, release_tag=${REL_TAG:-<dry-run>}"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack & wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack,wasm-bindgen-cli@0.2.130
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Run Rust optical & sensor unit tests
+        run: cargo test --workspace
+
+      - name: Build WASM & Vite production frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build:wasm
+          npm run lint
+          npm run build
+
+      - name: Upload compiled web/dist for desktop builders
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+
+      - name: Package standalone Web offline archives
+        run: |
+          VER="${{ steps.meta.outputs.version }}"
+          mkdir -p staging/collima-web release-assets
+          cp -r web/dist/* staging/collima-web/
+          cp LICENSE staging/collima-web/
+          cat > staging/collima-web/OFFLINE_USAGE.txt <<'EOF'
+          collima — Standalone Offline Web + WebAssembly Bundle
+          =====================================================
+          Because browsers block ES Module Web Workers and WebAssembly streaming over raw
+          file:// URLs, serve this directory locally with any static HTTP server:
+
+            • Python 3:  python3 -m http.server 8080
+            • Node.js:   npx serve .
+
+          Then open http://localhost:8080 in Chrome, Edge, Firefox, or Safari.
+          All camera RAW decoding and optical/sensor diagnostics run 100% locally in memory.
+          EOF
+          (cd staging && zip -qr "../release-assets/collima-v${VER}-web-offline.zip" collima-web)
+          tar -C staging -czf "release-assets/collima-v${VER}-web-offline.tar.gz" collima-web
+          ls -lh release-assets
+
+      - name: Upload Web release archives
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-web
+          path: release-assets/*
+          if-no-files-found: error
+
+  build-desktop:
+    name: Desktop (${{ matrix.label }})
+    needs: build-web
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            label: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - id: windows-arm64
+            label: Windows ARM64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+          - id: macos-arm64
+            label: macOS Apple Silicon (arm64)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - id: macos-x64
+            label: macOS Intel (x64)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - id: linux-x64
+            label: Linux x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+          - id: linux-arm64
+            label: Linux ARM64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux system libraries (GTK / WebKitGTK 4.1 / RPM / AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            patchelf \
+            rpm \
+            xdg-utils
+
+      - name: Disable Spotlight indexing on macOS (prevents APFS DMG detach race)
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off || true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Setup Rust toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Tauri Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+          key: ${{ matrix.id }}
+
+      - name: Install Tauri CLI
+        working-directory: web
+        run: npm ci
+
+      - name: Download prebuilt Web + WASM bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Build Tauri bundles (Linux)
+        if: runner.os == 'Linux'
+        env:
+          SKIP_WEB_BUILD: '1'
+          NO_STRIP: 'true'
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles deb,rpm
+          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles appimage \
+            || (sleep 3 && npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles appimage)
+
+      - name: Build Tauri bundles (macOS with ad-hoc code signing)
+        if: runner.os == 'macOS'
+        env:
+          SKIP_WEB_BUILD: '1'
+          APPLE_SIGNING_IDENTITY: '-'
+        run: |
+          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles app
+          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles dmg \
+            || (sleep 4 && npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles dmg)
+
+      - name: Build Tauri bundles (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SKIP_WEB_BUILD: '1'
+        run: |
+          npm --prefix web run tauri:build -- --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+
+      - name: Stage Linux release artifacts
+        if: runner.os == 'Linux'
+        run: |
+          VER="${{ needs.build-web.outputs.version }}"
+          REL_DIR="src-tauri/target/${{ matrix.target }}/release"
+          mkdir -p release-assets staging-portable/collima
+          cp "${REL_DIR}"/bundle/deb/*.deb release-assets/
+          cp "${REL_DIR}"/bundle/rpm/*.rpm release-assets/
+          cp "${REL_DIR}"/bundle/appimage/*.AppImage release-assets/
+          cp "${REL_DIR}/collima" staging-portable/collima/
+          cp LICENSE staging-portable/collima/
+          chmod +x staging-portable/collima/collima
+          tar -C staging-portable -czf "release-assets/collima-v${VER}-${{ matrix.id }}-portable.tar.gz" collima
+          ls -lh release-assets
+
+      - name: Stage macOS release artifacts
+        if: runner.os == 'macOS'
+        run: |
+          VER="${{ needs.build-web.outputs.version }}"
+          REL_DIR="src-tauri/target/${{ matrix.target }}/release"
+          mkdir -p release-assets
+          cp "${REL_DIR}"/bundle/dmg/*.dmg release-assets/
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${REL_DIR}/bundle/macos/collima.app" \
+            "release-assets/collima-v${VER}-${{ matrix.id }}.app.zip"
+          ls -lh release-assets
+
+      - name: Stage Windows release artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.build-web.outputs.version }}"
+          $relDir = "src-tauri/target/${{ matrix.target }}/release"
+          New-Item -ItemType Directory -Force -Path "release-assets" | Out-Null
+          New-Item -ItemType Directory -Force -Path "staging-portable/collima" | Out-Null
+          if (Test-Path "$relDir/bundle/nsis") {
+            Copy-Item "$relDir/bundle/nsis/*.exe" -Destination "release-assets/"
+          }
+          if (Test-Path "$relDir/bundle/msi") {
+            Copy-Item "$relDir/bundle/msi/*.msi" -Destination "release-assets/"
+          }
+          Copy-Item "$relDir/collima.exe" -Destination "staging-portable/collima/"
+          Copy-Item "LICENSE" -Destination "staging-portable/collima/"
+          Compress-Archive -Path "staging-portable/collima/*" -DestinationPath "release-assets/collima-v$ver-${{ matrix.id }}-portable.zip" -Force
+          Get-ChildItem "release-assets"
+
+      - name: Upload platform release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.id }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-web, build-desktop]
+    if: needs.build-web.outputs.release_tag != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all platform release assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt & Release Notes
+        run: |
+          cd dist-release
+          sha256sum * | tee SHA256SUMS.txt
+          cd ..
+          VER="${{ needs.build-web.outputs.version }}"
+          TAG="${{ needs.build-web.outputs.release_tag }}"
+          cat > release-notes.md <<EOF
+          ## \`collima\` ${TAG} — 全平台相机传感器与镜头光轴光学诊断工作台
+
+          🌐 **在线免安装即开即用（GitHub Pages）**：https://h-void.github.io/collima/
+
+          ---
+
+          ### 核心亮点
+          - **Optical Tilt Inspector（镜头光轴倾斜与场曲检视）**：去马赛克前独立双绿通道（\`G1 / G2\`）黑电平校准归一化 Tenengrad 锐度算子，消除暗角偏置干扰；基于加权最小二乘（WLS）定量解耦正常对称场曲与卡口/转接环/镜组倾斜（Tilt），支持星野点光源 HFR 估算、九宫格全分辨率 1:1 同步最近邻放大镜与 5×5 等高线热力图。
+          - **Sensor Noise Lab（传感器读出噪声与双原生 ISO 测绘）**：单遍 65,536 桶精确 \`u16\` 直方图与迭代 \`5σ\` 热像素剔除，独立标定 \`R / G1 / G2 / B\` 四通道黑电平漂移、读出噪声 \`σ_ADU\`、工程动态范围（EV）并自动捕获双原生 ISO HCG 拐点，支持原生系统对话框导出 CSV / JSON 报告。
+          - **纯本地双引擎 RAW 解码矩阵**：\`flashraw 0.2\` + \`ticoraw 0.2\` 纯内存解析约 40 种相机 RAW 格式，原生支持 **索尼 ARW 6.0 (\`X-OCN / LLVC3\` 已压缩 HQ)**、**索尼 Pixel Shift \`.ARQ\`**、**尼康高效率压缩 \`.NEF\` (\`HE / HE*\` TicoRAW)**、佳能 \`.CR3 / .CR2\`、Adobe \`.DNG\`（含 JPEG XL）、富士 X-Trans \`.RAF\`、松下/徕卡 \`.RW2\`、奥林巴斯/OM \`.ORF\`、宾得 \`.PEF\` 等。
+
+          ---
+
+          ### 全平台下载指南
+
+          | 平台与架构 | 推荐安装包 | 免安装便携包 / 归档 |
+          | --- | --- | --- |
+          | **Windows (x64)** | \`collima_${VER}_x64-setup.exe\` / \`collima_${VER}_x64_en-US.msi\` | \`collima-v${VER}-windows-x64-portable.zip\` |
+          | **Windows (ARM64)** | \`collima_${VER}_arm64-setup.exe\` | \`collima-v${VER}-windows-arm64-portable.zip\` |
+          | **macOS (Apple Silicon M1–M4)** | \`collima_${VER}_aarch64.dmg\` | \`collima-v${VER}-macos-arm64.app.zip\` |
+          | **macOS (Intel x86_64)** | \`collima_${VER}_x64.dmg\` | \`collima-v${VER}-macos-x64.app.zip\` |
+          | **Linux (x86_64)** | \`collima_${VER}_amd64.deb\` / \`collima-${VER}-1.x86_64.rpm\` / \`collima_${VER}_amd64.AppImage\` | \`collima-v${VER}-linux-x64-portable.tar.gz\` |
+          | **Linux (ARM64 / aarch64)** | \`collima_${VER}_arm64.deb\` / \`collima-${VER}-1.aarch64.rpm\` / \`collima_${VER}_arm64.AppImage\` | \`collima-v${VER}-linux-arm64-portable.tar.gz\` |
+          | **Web 静态离线包** | — | \`collima-v${VER}-web-offline.zip\` / \`.tar.gz\` |
+
+          > **macOS 首次打开提示**：由于开源构建采用 Ad-hoc 签名而未经过 Apple 公证（Notarization），macOS Gatekeeper 若提示「已损坏，无法打开」或「无法验证开发者」，将 \`collima.app\` 拖入 \`/Applications\` 后在终端执行一次：
+          > \`\`\`bash
+          > xattr -cr /Applications/collima.app
+          > \`\`\`
+          > 即可正常启动。所有产物哈希校验值见附件 \`SHA256SUMS.txt\`。
+          EOF
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.build-web.outputs.release_tag }}
+          name: collima ${{ needs.build-web.outputs.release_tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: dist-release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
