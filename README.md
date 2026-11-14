@@ -1,102 +1,121 @@
-# `collima` — 相机传感器与镜头光轴光学诊断工作台
+# `collima` — Camera Sensor & Lens Optical Collimation Workbench
 
-**`collima`** 是一个纯本地运行的跨平台相机与镜头光学诊断工作台（支持 **Web 浏览器在线即开即用** 与 **Tauri v2 原生桌面端**）。底层基于 **Rust + WebAssembly** 实现纯内存（零云端上传）RAW 原始字节流解码与拜耳像素统计，前端基于 **React + Web Worker + HTML5 Canvas** 提供零延迟的 1:1 像素级视觉检视。
+**English** · [简体中文](./README.zh-CN.md) · [繁體中文](./README.zh-TW.md) · [日本語](./README.ja.md)
 
-- 🌐 **在线体验（GitHub Pages，支持 简体中文 / 繁體中文 / English / 日本語）**：<https://h-void.github.io/collima/>
-- 📦 **全平台桌面端与离线包下载（Windows x64/ARM64 · macOS Apple Silicon/Intel · Linux x64/ARM64）**：[GitHub Releases](https://github.com/h-void/collima/releases)
+**`collima`** is a 100% local, cross-platform optical and sensor metrology workbench for cameras and lenses — available both as an **instant browser app** and as a **native Tauri v2 desktop application**. Powered by **Rust + WebAssembly**, all RAW byte streams are decoded and analyzed strictly in local sandboxed memory (zero cloud uploads), paired with a **React + Web Worker + HTML5 Canvas** frontend for zero-latency 1:1 sensor-pixel inspection.
+
+- 🌐 **Live Online Workbench (GitHub Pages — English / 简体中文 / 繁體中文 / 日本語)**: <https://h-void.github.io/collima/?lang=en>
+- 📦 **Native Desktop Apps & Offline Bundles (Windows x64/ARM64 · macOS Apple Silicon/Intel · Linux x64/ARM64)**: [GitHub Releases](https://github.com/h-void/collima/releases)
 
 ---
 
-## 核心能力闭环
+## Core Capabilities
 
-### 1. Optical Tilt Inspector（镜头光轴倾斜与场曲诊断）
-- **去马赛克前独立双绿通道测量**：直接在原始拜耳阵列的 $G_1$ 与 $G_2$ 独立子平面上分别计算梯度并取均值，既规避广角镜头边缘横向色差（倍率色散）造成的伪边缘对比度，又避免将 $G_1/G_2$ 斜向合并导致的 45° 高频细节衰减。
-- **消除暗角干扰的黑电平校准归一化 Tenengrad 算子**：
+### 1. Optical Tilt Inspector (Focal-Plane Tilt & Field Curvature Metrology)
+- **Pre-Demosaic Independent Dual-Green Measurement**: Computes spatial gradients separately on raw Bayer $G_1$ and $G_2$ sub-planes before averaging — eliminating false edge contrast induced by lateral chromatic aberration (LCA) on wide-angle lenses while avoiding the 45° high-frequency MTF attenuation caused by diagonally merging $G_1/G_2$.
+- **Vignetting-Immune, Black-Level-Calibrated Normalized Tenengrad Operator**:
 
   $$\displaystyle S _ {G_k} = \frac{1}{N \cdot (\mu _ {G_k} - \text{BL} _ {G_k})^2} \sum _ {(x,y)} \max\left(0, G_x^2 + G_y^2 - \tau _ {\text{noise}}^2\right)$$
 
-  显式扣除通道标称黑电平 $\text{BL} _ {G_k}$ 并施加局部底噪门限 $\tau _ {\text{noise}}$，防止镜头边缘暗角（Vignetting）因仅衰减光信号而不衰减固定黑电平偏置（如索尼 512 / 佳能 2048 ADU）所引发的系统性边缘锐度低估。
-- **场曲 vs 光轴倾斜（Tilt）解耦与星野 HFR 检测**：采用加权最小二乘（WLS）拟合一阶倾斜平面与二阶径向对称衰减项，自动区分「大光圈正常对称场曲」与「卡口法兰/转接环/镜组偏心导致的单侧塌陷」，并内置点光源半通量半径（Star HFR）估算。
-- **九宫格 1:1 同步放大镜 + 全画幅 5×5 等高线热力图**：
-  - 9 个视口（`TL, TC, TR, ML, MC, MR, BL, BC, BR`）直接从 WASM 驻留 `RawSession` 实时切片全分辨率 1:1 传感器像素（绝非半尺寸预览图二次插值放大），支持 `100% / 200% / 400%` 最近邻（`imageSmoothingEnabled = false`）同步检视。
-  - 支持一键切换 **1:1 色彩解马赛克 (sRGB)**、**去马赛克前纯绿通道** 与 **原始拜耳 CFA 阵列**，支持按住 `Shift` 或开启「微调采样点」单独拖动局部采样框避开纯色天空并实时重算锐度。
+  Explicitly subtracts nominal per-channel black level $\text{BL} _ {G_k}$ and enforces a local noise-floor gate $\tau _ {\text{noise}}$, preventing optical vignetting — which attenuates photon signal without attenuating fixed camera pedestals (e.g., Sony 512 ADU or Canon 2048 ADU) — from systematically underestimating corner sharpness.
+- **Field Curvature vs. Focal-Plane Tilt Decoupling & Star HFR**: Fits a first-order tilt plane alongside a second-order radially symmetric falloff term via Weighted Least Squares (WLS), quantitatively separating normal wide-open field curvature from mount/adapter/element decentering, with built-in Half-Flux Radius (Star HFR) estimation for astrophotography frames.
+- **9-Zone Synchronized 1:1 Pixel Loupe + Full-Frame 5×5 Contour Heatmap**:
+  - 9 sampling stations (`TL, TC, TR, ML, MC, MR, BL, BC, BR`) slice true 1:1 sensor pixels directly from the resident WASM `RawSession` (never upscaled from half-size previews), supporting lockstep `100% / 200% / 400%` nearest-neighbor (`imageSmoothingEnabled = false`) panning.
+  - Instant switching among **1:1 Demosaiced Color (sRGB)**, **Pre-Demosaic Green (Zero Lateral CA)**, and **Raw Bayer CFA Mosaic**, plus `Shift`-drag or **"Adjust ROI"** mode to relocate individual station boxes away from blank sky onto textured detail with live sharpness recomputation.
 
-### 2. Sensor Noise Lab（传感器读出噪声与双原生 ISO 测绘）
-- **单遍 $O(N)$ 精确 65,536 桶 `u16` 直方图引擎**：无需为 6100 万像素暗帧分配额外排序数组，避免低 ISO 下整数四分位距（IQR = 1~2 ADU）量化坍缩误杀正常高斯尾部，以迭代 $5\sigma$ 门限精准剥离长曝光热像素（Hot Pixels）与坏点。
-- **拜耳四通道 ($R, G_1, G_2, B$) 独立标定**：
-  - **黑电平漂移（Black Level Offset）**： $\Delta \text{BL} = \mu _ {\text{clean}} - \text{BL} _ {\text{meta}}$，自动检测固件零点截断（Zero Clipping）与机身漏光。
-  - **读出噪声 ($\sigma _ {\text{ADU}}$) 与 ISO 100 归一化等效输入底噪**： $\sigma _ {\text{norm}} = \sigma _ {\text{ADU}} \cdot (100 / \text{ISO})$。
-  - **工程动态范围（Engineering DR, EV）**：
+### 2. Sensor Noise Lab (Read Noise & Dual Native ISO Calibration)
+- **Single-Pass $O(N)$ Exact 65,536-Bin `u16` Histogram Engine**: Eliminates 61 MP auxiliary sort allocations and avoids integer Interquartile Range (`IQR = 1–2 ADU`) quantization collapse at base ISO, applying iterative $5\sigma$ rejection to strip hot pixels and cosmic-ray hits cleanly.
+- **Independent 4-Channel ($R, G_1, G_2, B$) Bayer Calibration**:
+  - **Black-Level Drift (Black Level Offset)**: $\Delta \text{BL} = \mu _ {\text{clean}} - \text{BL} _ {\text{meta}}$, automatically flagging firmware zero-clipping or body light leaks.
+  - **Read Noise ($\sigma _ {\text{ADU}}$) & ISO 100 Input-Referred Noise**: $\sigma _ {\text{norm}} = \sigma _ {\text{ADU}} \cdot (100 / \text{ISO})$.
+  - **Engineering Dynamic Range (Engineering DR, EV)**:
 
     $$\displaystyle \text{DR} _ {\text{EV}} = \log_2 \left( \frac{\text{WhiteLevel} - \text{BlackLevel}}{\sigma _ {\text{ADU}}} \right)$$
 
-- **双原生 ISO / 高转换增益（HCG）拐点自动捕获**：基于物理单调性与二阶斜率跳变判据，精准标注双原生 ISO 增益切换点（同时免疫老款非 ISO 不变性传感器的平滑 PGA 增益曲线误报），支持一键导出 CSV / JSON 标定数据。
+- **Automatic Dual Native ISO / High Conversion Gain (HCG) Detection**: Identifies physical HCG switch points via monotonicity and second-order slope-jump criteria (immune to false positives on legacy non-ISO-invariant smooth PGA curves), with one-click **CSV / JSON** export.
 
-### 3. 四语实时响应国际化（`zh-CN` · `zh-TW` · `en` · `ja`）
-- 自动匹配操作系统 / 浏览器语言偏好（亦支持 `?lang=zh-CN|zh-TW|en|ja` 参数直达与 `localStorage` 记忆），顶栏一键切换语言时无需重新解码 60MP RAW 字节流即可实时重译全部光学与底噪诊断报告。
+### 3. Built-in 14-Bit Synthetic Suite & 4-Locale Reactive Internationalization (`en` · `zh-CN` · `zh-TW` · `ja`)
+- **Zero-Sample Instant Verification**: Synthesizes uncompressed 14-bit RGGB `.DNG` byte streams directly in WASM memory (tilted resolution chart, coma/tilted starfield, 1.4 EV vignetted collimated reference, and an 8-stop ISO 100–6400 dark series with an HCG switch at ISO 800) and feeds them through the exact production decode pipeline.
+- **Reactive Multi-Language UI**: Auto-detects OS/browser locale (with `?lang=en|zh-CN|zh-TW|ja` deep-linking and `localStorage` persistence) and re-renders all optical verdicts and noise diagnostics instantly without re-decoding 60 MP RAW buffers.
 
 ---
 
-## 双引擎纯 Rust / WASM RAW 解码矩阵（含尼康 / 索尼最新视频源压缩格式）
+## Capture Guide (How to Shoot Test RAWs)
 
-针对近年尼康与索尼将自家电影机/视频 RAW 压缩技术下放至静态照片 RAW 的趋势，`collima-core` 采用 **MIT/Apache-2.0 纯 Rust 双解码引擎架构**：
+- **For Optical Tilt Inspection (1 RAW frame)**:
+  1. Shoot a **planar textured target** perpendicular to the optical axis (distant building facade, brick wall filling all four corners, printed resolution chart, or a **zenith starfield** at infinity).
+  2. Shoot **wide open** (maximum aperture, shallowest depth of field), at **base ISO (e.g., ISO 64–100)**, on a tripod with IBIS off and EFCS/electronic shutter (or fast shutter speed), focusing precisely at the **center (`MC`)**.
+- **For Sensor Read-Noise & Dual Native ISO Mapping (Multi-ISO Dark RAWs)**:
+  1. Attach a tight **body cap** (or lens cap), cover the **viewfinder** against stray light, and shoot in a dark environment.
+  2. Set **Manual exposure (`M`) + Manual Focus (`MF`)**, turn off Long Exposure NR, fix shutter speed at **`1/1000 s` – `1/4000 s`** (isolating pure read noise from thermal dark current), and capture one uncompressed or lossless RAW per ISO step (e.g., ISO 100, 200, 400, 500, 640, 800, 1600, 3200, 6400).
 
-| 解码引擎 | 覆盖相机与压缩编码格式 |
+---
+
+## Dual-Engine Pure-Rust / WASM RAW Codec Matrix
+
+To support modern mirrorless bodies that bring cinema/video RAW wavelet codecs to still photography, `collima-core` combines two **MIT/Apache-2.0 pure-Rust decoders**:
+
+| Engine | Supported Cameras & Compression Formats |
 | --- | --- |
-| [`flashraw 0.2`](https://github.com/ybouane/flashraw) | 覆盖约 40 种相机 RAW 格式：原生支持 **索尼 `ARW 6.0` 容器下的 `X-OCN / LLVC3` 5/3 小波压缩**（即 α7 V `ILCE-7M5` / α7R VI `ILCE-7RM6` 下放自 CineAlta 电影机的「已压缩 HQ / 新已压缩」编码）、索尼无损压缩 ARW (`L/M/S`)、佳能 `.CR3` (`CRX` 无损与 `C-RAW`) / `.CR2`、传统尼康 `.NEF`（未压缩 / 无损 / 传统有损）、Adobe `.DNG`（含 DNG 1.7 JPEG XL 压缩）、富士 `.RAF`（含 X-Trans 6×6）、松下/徕卡 `.RW2` / `.RWL`、奥林巴斯/OM `.ORF`、宾得 `.PEF`、哈苏 `.3FR`、飞思 `.IIQ`。 |
-| [`ticoraw 0.2`](https://github.com/lukaj99/ticoraw) | 专为 **尼康高效率压缩 `.NEF`（High Efficiency `HE` 与 `HE*`）** 打造的纯 Rust 洁净室位精确解码器，完整解析尼康 Z9、Z8、Zf、Z6III、Z5II、Z50II、ZR 等机型源自 intoPIX TicoRAW / N-RAW 的 JPEG XS 亚像素小波码流，并自动融合 `flashraw` 提取的镜头与曝光 EXIF 元数据。 |
+| [`flashraw 0.2`](https://github.com/ybouane/flashraw) | Covers ~40 camera RAW formats: native support for **Sony `ARW 6.0` `X-OCN / LLVC3` 5/3 wavelet compression** (*Compressed HQ* derived from CineAlta on α7 V `ILCE-7M5` / α7R VI `ILCE-7RM6`), Sony Lossless Compressed ARW (`L/M/S`) & Pixel Shift `.ARQ`, Canon `.CR3` (`CRX` lossless & `C-RAW`) / `.CR2`, classic Nikon `.NEF` (uncompressed / lossless / classic lossy), Adobe `.DNG` (incl. DNG 1.7 JPEG XL), Fujifilm `.RAF` (incl. X-Trans 6×6), Panasonic/Leica `.RW2` / `.RWL`, OM/Olympus `.ORF`, Pentax `.PEF`, Hasselblad `.3FR`, Phase One `.IIQ`. |
+| [`ticoraw 0.2`](https://github.com/lukaj99/ticoraw) | Dedicated clean-room bit-exact Rust decoder for **Nikon High Efficiency `.NEF` (`HE` and `HE*`)** — decoding the intoPIX TicoRAW / N-RAW JPEG XS sub-band wavelet streams from Nikon Z9, Z8, Zf, Z6III, Z5II, Z50II, and ZR while fusing lens and exposure EXIF metadata extracted via `flashraw`. |
 
 ---
 
-## 仓库目录结构
+## Repository Structure
 
 ```text
 collima/
-├── Cargo.toml                        # Rust Workspace 与 LTO Release 编译配置
+├── README.md                         # Documentation (English, default)
+├── README.zh-CN.md                   # Documentation (简体中文)
+├── README.zh-TW.md                   # Documentation (繁體中文)
+├── README.ja.md                      # Documentation (日本語)
+├── THIRD-PARTY-NOTICES.md            # Upstream open-source copyright & license notices
+├── Cargo.toml                        # Rust workspace & LTO release profile
 ├── crates/
-│   └── collima-core/                 # 核心光学与底噪计算库 (cdylib + rlib, 兼容 wasm32-unknown-unknown)
+│   └── collima-core/                 # Core optical & sensor metrology crate (cdylib + rlib, wasm32-compatible)
 │       ├── Cargo.toml
 │       └── src/
-│           ├── lib.rs                # WASM 导出接口 (RawSession 状态会话 + 批量暗帧接口)
-│           ├── decoder.rs            # 纯内存双引擎解码 (flashraw + ticoraw) 与有效画幅/CFA 校准
-│           ├── bayer.rs              # R/G1/G2/B 四平面分离、色彩矩阵 2x2 预览与 1:1 局部切片渲染
-│           ├── sharpness.rs          # 黑电平校准 G1/G2 Tenengrad、星点 HFR 与 WLS Tilt 向量解耦
-│           ├── noise.rs              # 65536 桶精确直方图、5σ 热像素剔除与双原生 ISO 拐点检测
-│           └── synthetic.rs          # 内置 14-bit 未压缩 RGGB .DNG 物理标定样张生成器
-├── src-tauri/                        # Tauri v2 原生桌面端外壳 (Windows / macOS / Linux)
+│           ├── lib.rs                # WASM bindings (stateful RawSession + batch dark-frame APIs)
+│           ├── decoder.rs            # In-memory dual-engine decode (flashraw + ticoraw) & active-area crop
+│           ├── bayer.rs              # R/G1/G2/B plane split, color-matrix 2x2 preview & 1:1 patch renderer
+│           ├── sharpness.rs          # Black-level calibrated G1/G2 Tenengrad, Star HFR & WLS tilt decoupling
+│           ├── noise.rs              # 65,536-bin exact histogram, 5σ hot-pixel rejection & HCG inflection detector
+│           └── synthetic.rs          # Built-in 14-bit uncompressed RGGB .DNG physical calibration generator
+├── src-tauri/                        # Tauri v2 native desktop shell (Windows / macOS / Linux)
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
-│   └── src/lib.rs                    # 原生系统保存对话框导出等桌面端命令桥接
-└── web/                              # React + TypeScript + Vite 交互工作台
+│   └── src/lib.rs                    # Native save-dialog export & desktop command bridge
+└── web/                              # React + TypeScript + Vite workbench frontend
     ├── package.json
     ├── vite.config.ts
     └── src/
-        ├── i18n/                     # 四语词典 (zh-CN/zh-TW/en/ja)、诊断动态本地化与 I18nProvider
-        ├── types/collima.ts          # 前后端强类型契约与 Worker 零拷贝消息协议
-        ├── workers/analyzer.worker.ts# 独立 Web Worker 线程管理 WASM 生命周期与串行批处理队列
+        ├── i18n/                     # 4-locale dictionaries (en/zh-CN/zh-TW/ja), reactive diagnostics & context
+        ├── types/collima.ts          # Strongly typed contracts & zero-copy Worker message protocol
+        ├── workers/analyzer.worker.ts# Dedicated Web Worker managing WASM lifecycle & serial batch queue
         ├── components/
-        │   ├── LanguageSwitcher.tsx  # 顶栏多语言切换器
-        │   ├── DropZone.tsx          # 单张/多张 RAW 拖拽校验与一键 14-bit 合成标定样张加载
-        │   ├── TiltInspector.tsx     # 九宫格 1:1 同步最近邻放大画布 + 5x5 等高线热力图 + 极坐标罗盘
-        │   └── NoiseChart.tsx        # 双轴对数 σ_ADU / EV 动态范围交互曲线 + G1 高斯直方图 + CSV/JSON 导出
-        └── App.tsx                   # 工作台顶栏、EXIF 遥测条与双模式状态切换
+        │   ├── LanguageSwitcher.tsx  # Top-bar locale switcher
+        │   ├── DropZone.tsx          # Single/batch RAW dropzone & 1-click 14-bit synthetic suite loader
+        │   ├── TiltInspector.tsx     # 9-zone 1:1 nearest-neighbor loupe + 5x5 contour heatmap + polar compass
+        │   └── NoiseChart.tsx        # Dual-axis Log2 σ_ADU / EV DR interactive chart + G1 histogram + CSV/JSON
+        └── App.tsx                   # Top bar, EXIF telemetry strip & dual-mode state orchestration
 ```
 
 ---
 
-## 本地构建与运行指南
+## Local Build & Development
 
-### 环境依赖
-- **Rust** (`>= 1.85`, 含 `wasm32-unknown-unknown` target) 与 **`wasm-pack`**
-- **Node.js** (`>= 20`) 与 `npm`
-- *(可选：构建桌面端安装包时)* [Tauri v2 系统依赖](https://v2.tauri.app/start/prerequisites/)（macOS 需 Xcode CLT，Windows 需 MSVC Build Tools + WebView2，Ubuntu/Debian 需 `libwebkit2gtk-4.1-dev` 等）
+### Prerequisites
+- **Rust** (`>= 1.85`, with the `wasm32-unknown-unknown` target) and **`wasm-pack`**
+- **Node.js** (`>= 20`) and `npm`
+- *(Optional, for native desktop installers)* [Tauri v2 system prerequisites](https://v2.tauri.app/start/prerequisites/) (Xcode CLT on macOS, MSVC Build Tools + WebView2 on Windows, `libwebkit2gtk-4.1-dev` on Ubuntu/Debian)
 
-### 1. 运行底层 Rust 单元与集成测试
+### 1. Run Rust Optical & Sensor Unit Tests
 ```bash
 cargo test --workspace
 ```
 
-### 2. 编译 WebAssembly 核心包并启动浏览器工作台
+### 2. Build WebAssembly Core & Start Browser Dev Server
 ```bash
 cd web
 npm install
@@ -104,34 +123,34 @@ npm run build:wasm
 npm run dev
 ```
 
-### 3. 构建生产环境 Web 静态包
+### 3. Build Production Static Web Bundle
 ```bash
 cd web
 npm run build
 ```
 
-### 4. 启动或打包 Tauri v2 原生桌面端
+### 4. Run or Package Tauri v2 Native Desktop App
 ```bash
 cd web
-npm run tauri:dev     # 启动原生桌面调试窗口
-npm run tauri:build   # 打包当前系统安装包 (.exe/.msi, .dmg, .deb/.rpm/.AppImage)
+npm run tauri:dev     # Launch native desktop debug window
+npm run tauri:build   # Package installers (.exe/.msi, .dmg, .deb/.rpm/.AppImage)
 ```
 
-> **macOS 桌面端首次启动说明**：GitHub Releases 中的 macOS 安装包采用开源构建 Ad-hoc 签名（未接入付费 Apple 公证）。若首次打开提示「已损坏」或「无法验证开发者」，将 `collima.app` 拖入 `/Applications` 后在终端执行一次 `xattr -cr /Applications/collima.app` 即可正常打开。
+> **macOS First-Launch Note**: macOS bundles in GitHub Releases use open-source ad-hoc signing (without paid Apple Developer notarization). If Gatekeeper reports that `"collima.app" is damaged` or from an unidentified developer on first launch, drag `collima.app` into `/Applications` and run `xattr -cr /Applications/collima.app` once in Terminal.
 
 ---
 
-## 致谢与开源依赖声明
+## Acknowledgments & Open-Source Notices
 
-`collima` 的光学倾斜/场曲解耦算法、去马赛克前双绿通道校准 Tenengrad、65,536 桶暗帧底噪与双原生 ISO 拐点检测引擎、14-bit `.DNG` 物理合成标定器及九宫格 1:1 交互工作台均为独立原创实现（并非复刻或改写自其他同类工具）。底层跨品牌 RAW 原始流解码与跨平台运行时基于以下优秀开源项目构建，特此向原作者与维护者们致以诚挚感谢：
+`collima`'s focal-plane tilt / field-curvature decoupling solver, pre-demosaic dual-green black-level-calibrated Tenengrad operator, 65,536-bin dark-frame read-noise & Dual Native ISO inflection detector, 14-bit `.DNG` physical synthetic calibrator, and 9-zone 1:1 interactive workbench are original implementations built from scratch (not a port or derivative of any other optical inspection tool). Cross-vendor RAW stream decoding and the cross-platform runtime stand on the shoulders of the following outstanding open-source projects, whose authors and maintainers we gratefully acknowledge:
 
 - **[@ybouane](https://github.com/ybouane) — [`ybouane/flashraw`](https://github.com/ybouane/flashraw)** (`MIT OR Apache-2.0`, `Copyright (c) 2026 Yassine Bouanane and FlashRaw contributors`)
-  - 提供约 40 种相机 RAW 格式的纯 Rust 内存安全解码引擎（含索尼 `ARW 6.0` `X-OCN / LLVC3`、佳能 `CR3`、Adobe `DNG 1.7`、富士 `RAF` 等）及相机色彩矩阵校准数据库。
+  - Memory-safe pure-Rust RAW decoding engine covering ~40 camera formats (including Sony `ARW 6.0` `X-OCN / LLVC3`, Canon `CR3`, Adobe `DNG 1.7`, Fujifilm `RAF`, etc.) and camera color-matrix calibration metadata.
 - **[@lukaj99](https://github.com/lukaj99) — [`lukaj99/ticoraw`](https://github.com/lukaj99/ticoraw)** (`MIT OR Apache-2.0`, `Copyright (c) 2026 Luka Jovanovic`)
-  - 提供尼康高效率压缩 `.NEF`（High Efficiency `HE` / `HE*`，intoPIX TicoRAW / JPEG XS）的纯 Rust 洁净室位精确解码器。
-- **核心生态与底层组件**：[`tirr-c/jxl-oxide`](https://github.com/tirr-c/jxl-oxide) (`MIT OR Apache-2.0`, DNG 1.7 JPEG XL 解码)、[`etemesi254/zune-image`](https://github.com/etemesi254/zune-image) (`MIT OR Apache-2.0 OR Zlib`)、[`rustwasm/wasm-bindgen`](https://github.com/rustwasm/wasm-bindgen) (`MIT OR Apache-2.0`)、[`tauri-apps/tauri`](https://github.com/tauri-apps/tauri) (`MIT OR Apache-2.0`)、[`facebook/react`](https://github.com/facebook/react) (`MIT`) 与 [`lucide-icons/lucide`](https://github.com/lucide-icons/lucide) (`ISC`)。
+  - Clean-room bit-exact pure-Rust decoder for Nikon High Efficiency `.NEF` (`HE` / `HE*`, intoPIX TicoRAW / JPEG XS).
+- **Core Ecosystem & Foundational Libraries**: [`tirr-c/jxl-oxide`](https://github.com/tirr-c/jxl-oxide) (`MIT OR Apache-2.0`, DNG 1.7 JPEG XL decoding), [`etemesi254/zune-image`](https://github.com/etemesi254/zune-image) (`MIT OR Apache-2.0 OR Zlib`), [`rustwasm/wasm-bindgen`](https://github.com/rustwasm/wasm-bindgen) (`MIT OR Apache-2.0`), [`tauri-apps/tauri`](https://github.com/tauri-apps/tauri) (`MIT OR Apache-2.0`), [`facebook/react`](https://github.com/facebook/react) (`MIT`), and [`lucide-icons/lucide`](https://github.com/lucide-icons/lucide) (`ISC`).
 
-完整的第三方开源组件版权声明与许可证文本见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)。
+Full third-party copyright notices and license texts are available in [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md).
 
 ---
 
