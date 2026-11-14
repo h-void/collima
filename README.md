@@ -9,8 +9,10 @@
 ### 1. Optical Tilt Inspector（镜头光轴倾斜与场曲诊断）
 - **去马赛克前独立双绿通道测量**：直接在原始拜耳阵列的 $G_1$ 与 $G_2$ 独立子平面上分别计算梯度并取均值，既规避广角镜头边缘横向色差（倍率色散）造成的伪边缘对比度，又避免将 $G_1/G_2$ 斜向合并导致的 45° 高频细节衰减。
 - **消除暗角干扰的黑电平校准归一化 Tenengrad 算子**：
-  $$S_{G_k} = \frac{1}{N \cdot (\mu_{G_k} - \text{BL}_{G_k})^2} \sum_{(x,y)} \max\!\left(0,\; G_x^2 + G_y^2 - \tau_{\text{noise}}^2\right)$$
-  显式扣除通道标称黑电平 $\text{BL}_{G_k}$ 并施加局部底噪门限 $\tau_{\text{noise}}$，防止镜头边缘暗角（Vignetting）因仅衰减光信号而不衰减固定黑电平偏置（如索尼 512 / 佳能 2048 ADU）所引发的系统性边缘锐度低估。
+
+  $$\displaystyle S _ {G_k} = \frac{1}{N \cdot (\mu _ {G_k} - \text{BL} _ {G_k})^2} \sum _ {(x,y)} \max\negthinspace\left(0,\thickspace G_x^2 + G_y^2 - \tau _ {\text{noise}}^2\right)$$
+
+  显式扣除通道标称黑电平 $\text{BL} _ {G_k}$ 并施加局部底噪门限 $\tau _ {\text{noise}}$，防止镜头边缘暗角（Vignetting）因仅衰减光信号而不衰减固定黑电平偏置（如索尼 512 / 佳能 2048 ADU）所引发的系统性边缘锐度低估。
 - **场曲 vs 光轴倾斜（Tilt）解耦与星野 HFR 检测**：采用加权最小二乘（WLS）拟合一阶倾斜平面与二阶径向对称衰减项，自动区分「大光圈正常对称场曲」与「卡口法兰/转接环/镜组偏心导致的单侧塌陷」，并内置点光源半通量半径（Star HFR）估算。
 - **九宫格 1:1 同步放大镜 + 全画幅 5×5 等高线热力图**：
   - 9 个视口（`TL, TC, TR, ML, MC, MR, BL, BC, BR`）直接从 WASM 驻留 `RawSession` 实时切片全分辨率 1:1 传感器像素（绝非半尺寸预览图二次插值放大），支持 `100% / 200% / 400%` 最近邻（`imageSmoothingEnabled = false`）同步检视。
@@ -18,11 +20,13 @@
 
 ### 2. Sensor Noise Lab（传感器读出噪声与双原生 ISO 测绘）
 - **单遍 $O(N)$ 精确 65,536 桶 `u16` 直方图引擎**：无需为 6100 万像素暗帧分配额外排序数组，避免低 ISO 下整数四分位距（IQR = 1~2 ADU）量化坍缩误杀正常高斯尾部，以迭代 $5\sigma$ 门限精准剥离长曝光热像素（Hot Pixels）与坏点。
-- **拜耳四通道（$R, G_1, G_2, B$）独立标定**：
-  - **黑电平漂移（Black Level Offset）**：$\Delta \text{BL} = \mu_{\text{clean}} - \text{BL}_{\text{meta}}$，自动检测固件零点截断（Zero Clipping）与机身漏光。
-  - **读出噪声（$\sigma_{\text{ADU}}$）与 ISO 100 归一化等效输入底噪**：$\sigma_{\text{norm}} = \sigma_{\text{ADU}} \cdot (100 / \text{ISO})$。
+- **拜耳四通道 ($R, G_1, G_2, B$) 独立标定**：
+  - **黑电平漂移（Black Level Offset）**： $\Delta \text{BL} = \mu _ {\text{clean}} - \text{BL} _ {\text{meta}}$，自动检测固件零点截断（Zero Clipping）与机身漏光。
+  - **读出噪声 ($\sigma _ {\text{ADU}}$) 与 ISO 100 归一化等效输入底噪**： $\sigma _ {\text{norm}} = \sigma _ {\text{ADU}} \cdot (100 / \text{ISO})$。
   - **工程动态范围（Engineering DR, EV）**：
-    $$\text{DR}_{\text{EV}} = \log_2 \left( \frac{\text{WhiteLevel} - \text{BlackLevel}}{\sigma_{\text{ADU}}} \right)$$
+
+    $$\displaystyle \text{DR} _ {\text{EV}} = \log_2 \left( \frac{\text{WhiteLevel} - \text{BlackLevel}}{\sigma _ {\text{ADU}}} \right)$$
+
 - **双原生 ISO / 高转换增益（HCG）拐点自动捕获**：基于物理单调性与二阶斜率跳变判据，精准标注双原生 ISO 增益切换点（同时免疫老款非 ISO 不变性传感器的平滑 PGA 增益曲线误报），支持一键导出 CSV / JSON 标定数据。
 
 ---
