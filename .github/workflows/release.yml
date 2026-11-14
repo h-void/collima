@@ -81,6 +81,7 @@ jobs:
           name: web-dist
           path: web/dist
           if-no-files-found: error
+          retention-days: 1
 
       - name: Package standalone Web offline archives
         run: |
@@ -110,6 +111,7 @@ jobs:
           name: release-web
           path: release-assets/*
           if-no-files-found: error
+          retention-days: 1
 
   build-desktop:
     name: Desktop (${{ matrix.label }})
@@ -286,6 +288,7 @@ jobs:
           name: release-${{ matrix.id }}
           path: release-assets/*
           if-no-files-found: error
+          retention-days: 1
 
   publish-release:
     name: Publish GitHub Release
