@@ -162,10 +162,10 @@ pub fn analyze_sharpness(img: &DecodedRawImage) -> SharpnessReport {
     }
 
     let center_raw = grid_3x3[4].sharpness;
-    let center_s = center_raw.max(1e-9);
+    let center_ok = grid_3x3[4].validity == CellValidity::Valid && center_raw > 1e-6;
     for cell in &mut grid_3x3 {
-        cell.relative_to_center = if center_raw > 1e-6 {
-            cell.sharpness / center_s
+        cell.relative_to_center = if center_ok {
+            cell.sharpness / center_raw
         } else {
             0.0
         };
@@ -184,8 +184,8 @@ pub fn analyze_sharpness(img: &DecodedRawImage) -> SharpnessReport {
             let nx = (x0 as f32 + 0.5 * w as f32) / aw as f32;
             let ny = (y0 as f32 + 0.5 * h as f32) / ah as f32;
             let mut cell = evaluate_rect(img, format!("R{}C{}", r, c), r, c, nx, ny, x0, y0, w, h);
-            cell.relative_to_center = if grid_5x3_ref(center_s, &grid_3x3[4]) > 0.0 {
-                cell.sharpness / center_s
+            cell.relative_to_center = if center_ok {
+                cell.sharpness / center_raw
             } else {
                 0.0
             };
@@ -194,22 +194,13 @@ pub fn analyze_sharpness(img: &DecodedRawImage) -> SharpnessReport {
     }
     // Normalize 5x5 relative_to_center against its own (2,2) center if valid and positive.
     let center_5 = grid_5x5[12].sharpness;
-    if center_5 > 1e-6 {
+    if grid_5x5[12].validity == CellValidity::Valid && center_5 > 1e-6 {
         for cell in &mut grid_5x5 {
             cell.relative_to_center = cell.sharpness / center_5;
         }
     }
 
-    compute_report_from_grids(grid_3x3, grid_5x5)
-}
-
-#[inline]
-fn grid_5x3_ref(center_s: f64, center_cell: &GridCellMetrics) -> f64 {
-    if center_cell.validity == CellValidity::Valid {
-        center_s
-    } else {
-        center_s
-    }
+    compute_report_from_grids(grid_3x3, grid_5x5, true)
 }
 
 /// Re-evaluate sharpness of a single custom ROI centered at `(norm_x, norm_y)` when the user
@@ -227,7 +218,7 @@ pub fn evaluate_custom_roi(
     let roi_w = ((aw as f32 * 0.14) as usize).clamp(32, aw);
     let roi_h = ((ah as f32 * 0.14) as usize).clamp(32, ah);
     let mut cell = evaluate_station(img, id.to_string(), row, col, norm_x, norm_y, roi_w, roi_h);
-    cell.relative_to_center = if center_sharpness > 1e-6 {
+    cell.relative_to_center = if center_sharpness.is_finite() && center_sharpness > 1e-6 {
         cell.sharpness / center_sharpness
     } else {
         0.0
@@ -238,46 +229,74 @@ pub fn evaluate_custom_roi(
 /// Recompute optical summary metrics after one or more 3x3 stations have been dragged by the user.
 pub fn recompute_report_with_custom_3x3(
     mut grid_3x3: Vec<GridCellMetrics>,
-    grid_5x5: Vec<GridCellMetrics>,
+    mut grid_5x5: Vec<GridCellMetrics>,
 ) -> SharpnessReport {
-    let center_s = grid_3x3
+    let (center_raw, center_ok) = grid_3x3
         .get(4)
-        .map(|c| c.sharpness)
-        .unwrap_or(0.0)
-        .max(1e-9);
+        .map(|c| (c.sharpness, c.validity == CellValidity::Valid && c.sharpness > 1e-6))
+        .unwrap_or((0.0, false));
     for cell in &mut grid_3x3 {
-        cell.relative_to_center = if center_s > 1e-6 {
-            cell.sharpness / center_s
+        cell.relative_to_center = if center_ok {
+            cell.sharpness / center_raw
         } else {
             0.0
         };
     }
-    compute_report_from_grids(grid_3x3, grid_5x5)
+    for cell in &mut grid_5x5 {
+        cell.relative_to_center = if center_ok {
+            cell.sharpness / center_raw
+        } else {
+            0.0
+        };
+    }
+    compute_report_from_grids(grid_3x3, grid_5x5, false)
 }
 
 fn compute_report_from_grids(
     grid_3x3: Vec<GridCellMetrics>,
     grid_5x5: Vec<GridCellMetrics>,
+    include_5x5_in_fit: bool,
 ) -> SharpnessReport {
     let center_sharpness = grid_3x3[4].sharpness;
     let center_validity = grid_3x3[4].validity;
-    let center_s = center_sharpness.max(1e-9);
+    let center_ok = center_validity == CellValidity::Valid && center_sharpness > 1e-6;
 
-    let tl = grid_3x3[0].sharpness / center_s;
-    let tc = grid_3x3[1].sharpness / center_s;
-    let tr = grid_3x3[2].sharpness / center_s;
-    let ml = grid_3x3[3].sharpness / center_s;
-    let mr = grid_3x3[5].sharpness / center_s;
-    let bl = grid_3x3[6].sharpness / center_s;
-    let bc = grid_3x3[7].sharpness / center_s;
-    let br = grid_3x3[8].sharpness / center_s;
+    let ret = |idx: usize| -> f64 {
+        if center_ok {
+            grid_3x3[idx].sharpness / center_sharpness
+        } else {
+            0.0
+        }
+    };
+    let is_valid = |idx: usize| -> bool { grid_3x3[idx].validity == CellValidity::Valid };
+
+    let tl = ret(0);
+    let tc = ret(1);
+    let tr = ret(2);
+    let ml = ret(3);
+    let mr = ret(5);
+    let bl = ret(6);
+    let bc = ret(7);
+    let br = ret(8);
+
+    let corner_pairs = [(0usize, tl), (2, tr), (6, bl), (8, br)];
+    let valid_corner_vals: Vec<f64> = corner_pairs
+        .iter()
+        .filter(|&&(idx, _)| center_ok && is_valid(idx))
+        .map(|&(_, v)| v)
+        .collect();
+    let corner_mean = if !valid_corner_vals.is_empty() {
+        valid_corner_vals.iter().sum::<f64>() / valid_corner_vals.len() as f64
+    } else {
+        0.25 * (tl + tr + bl + br)
+    };
 
     let corner_retention = CornerRetention {
         tl,
         tr,
         bl,
         br,
-        mean: 0.25 * (tl + tr + bl + br),
+        mean: corner_mean,
     };
     let edge_retention = EdgeRetention {
         top: tc,
@@ -286,10 +305,46 @@ fn compute_report_from_grids(
         right: mr,
     };
 
-    let tl_br_diff = (tl - br).abs();
-    let tr_bl_diff = (tr - bl).abs();
-    let lr_bal = 0.333_333_333 * ((tr + mr + br) - (tl + ml + bl));
-    let tb_bal = 0.333_333_333 * ((bl + bc + br) - (tl + tc + tr));
+    // Only compare diagonal / opposing station pairs when BOTH stations contain valid planar texture,
+    // preventing pure blue sky or clipped highlights in one corner from masquerading as lens tilt.
+    let tl_br_diff = if center_ok && is_valid(0) && is_valid(8) {
+        (tl - br).abs()
+    } else {
+        0.0
+    };
+    let tr_bl_diff = if center_ok && is_valid(2) && is_valid(6) {
+        (tr - bl).abs()
+    } else {
+        0.0
+    };
+
+    let mut lr_sum = 0.0f64;
+    let mut lr_cnt = 0usize;
+    for &(li, ri, lv, rv) in &[(0usize, 2usize, tl, tr), (3, 5, ml, mr), (6, 8, bl, br)] {
+        if center_ok && is_valid(li) && is_valid(ri) {
+            lr_sum += rv - lv;
+            lr_cnt += 1;
+        }
+    }
+    let lr_bal = if lr_cnt > 0 {
+        lr_sum / lr_cnt as f64
+    } else {
+        0.0
+    };
+
+    let mut tb_sum = 0.0f64;
+    let mut tb_cnt = 0usize;
+    for &(ti, bi, tv, bv) in &[(0usize, 6usize, tl, bl), (1, 7, tc, bc), (2, 8, tr, br)] {
+        if center_ok && is_valid(ti) && is_valid(bi) {
+            tb_sum += bv - tv;
+            tb_cnt += 1;
+        }
+    }
+    let tb_bal = if tb_cnt > 0 {
+        tb_sum / tb_cnt as f64
+    } else {
+        0.0
+    };
 
     let asymmetry = AsymmetryMetrics {
         tl_br_diff,
@@ -308,9 +363,9 @@ fn compute_report_from_grids(
         .filter(|c| c.validity == CellValidity::Valid)
         .count();
 
-    // Fit normalized surface r(u, v) = c0 + tx * u + ty * v + cr * (u^2 + v^2)
-    // Prefer 5x5 valid cells when >= 12 are valid, combined with 3x3 valid cells for corner precision.
-    let (tx, ty, radial_falloff) = fit_tilt_and_curvature(&grid_3x3, &grid_5x5);
+    // Fit normalized surface r(u, v) = c0 + tx * u + ty * v - cr * (u^2 + v^2) / 2
+    let (tx, ty, radial_falloff) =
+        fit_tilt_and_curvature(&grid_3x3, &grid_5x5, include_5x5_in_fit);
 
     let mag = (tx * tx + ty * ty).sqrt();
     let angle_deg = if mag > 1e-6 {
@@ -319,7 +374,22 @@ fn compute_report_from_grids(
         0.0
     };
     let collapse_angle = normalize_deg(angle_deg + 180.0);
-    let collapse_label = direction_label(collapse_angle, mag);
+    let mut collapse_label = direction_label(collapse_angle, mag);
+    if collapse_label == "Centered" && asymmetry.max_diagonal_asymmetry >= 0.16 && center_ok {
+        let corner_labels = [
+            (0usize, tl, "Top-Left (TL)"),
+            (2, tr, "Top-Right (TR)"),
+            (6, bl, "Bottom-Left (BL)"),
+            (8, br, "Bottom-Right (BR)"),
+        ];
+        if let Some(&(_, _, lbl)) = corner_labels
+            .iter()
+            .filter(|&&(idx, _, _)| is_valid(idx))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        {
+            collapse_label = lbl.to_string();
+        }
+    }
 
     let tilt_vector = TiltVector {
         tx,
@@ -351,7 +421,7 @@ fn compute_report_from_grids(
         ));
     }
 
-    let (grade, verdict_title) = if center_validity != CellValidity::Valid || valid_3x3 < 5 {
+    let (grade, verdict_title) = if !center_ok || valid_3x3 < 5 {
         notes.push(
             "Insufficient valid textured stations to separate mount tilt from scene framing."
                 .to_string(),
@@ -382,7 +452,7 @@ fn compute_report_from_grids(
             OpticalGrade::MildTilt,
             format!("Mild Optical Asymmetry / Tilt ({collapse_label})"),
         )
-    } else if corner_retention.mean < 0.68 && radial_falloff > 0.15 {
+    } else if valid_corner_vals.len() >= 2 && corner_retention.mean < 0.68 && radial_falloff > 0.15 {
         notes.push(format!(
             "Corners decay symmetrically (mean corner retention {:.0}%, diagonal Δ {:.1}%), indicating normal wide-open field curvature / sagittal-meridional MTF falloff rather than mount tilt.",
             corner_retention.mean * 100.0,
@@ -421,6 +491,7 @@ fn compute_report_from_grids(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_station(
     img: &DecodedRawImage,
     id: String,
@@ -432,8 +503,18 @@ fn evaluate_station(
     roi_h: usize,
 ) -> GridCellMetrics {
     let [_, _, aw, ah] = img.active_rect;
-    let cx = (norm_x.clamp(0.02, 0.98) * aw as f32).round() as isize;
-    let cy = (norm_y.clamp(0.02, 0.98) * ah as f32).round() as isize;
+    let safe_nx = if norm_x.is_finite() {
+        norm_x.clamp(0.02, 0.98)
+    } else {
+        0.5
+    };
+    let safe_ny = if norm_y.is_finite() {
+        norm_y.clamp(0.02, 0.98)
+    } else {
+        0.5
+    };
+    let cx = (safe_nx * aw as f32).round() as isize;
+    let cy = (safe_ny * ah as f32).round() as isize;
 
     let x0 = ((cx - roi_w as isize / 2).clamp(0, (aw - roi_w) as isize) as usize) & !1;
     let y0 = ((cy - roi_h as isize / 2).clamp(0, (ah - roi_h) as isize) as usize) & !1;
@@ -459,10 +540,11 @@ fn evaluate_rect(
     w: usize,
     h: usize,
 ) -> GridCellMetrics {
-    let x0 = x0 & !1;
-    let y0 = y0 & !1;
-    let w = (w & !1).max(6);
-    let h = (h & !1).max(6);
+    let [_, _, aw, ah] = img.active_rect;
+    let x0 = (x0 & !1).min(aw.saturating_sub(4));
+    let y0 = (y0 & !1).min(ah.saturating_sub(4));
+    let w = (w & !1).clamp(4, aw.saturating_sub(x0));
+    let h = (h & !1).clamp(4, ah.saturating_sub(y0));
 
     match img.meta.mosaic_kind {
         MosaicKind::Bayer2x2 => {
@@ -480,9 +562,11 @@ fn evaluate_rect(
             let star_count = p1.star_count;
             let median_star_hfr_px = p1.median_hfr_px.map(|hfr_sub| hfr_sub * 2.0);
 
+            let blank_quads = p1.blank_quads.max(p2.blank_quads);
             let validity = classify_validity(
                 mean_signal_norm,
                 edge_density,
+                blank_quads,
                 clipped_fraction,
                 star_count,
             );
@@ -507,9 +591,57 @@ fn evaluate_rect(
             }
         }
         MosaicKind::LinearRgb => {
-            let p = eval_linear_green(img, x0, y0, w, h);
-            let validity =
-                classify_validity(p.mean_norm, p.edge_density, p.clipped_frac, p.star_count);
+            let p1 = eval_linear_component(img, x0, y0, w, h, 1, 1);
+            let (
+                sharpness,
+                sharpness_g1,
+                sharpness_g2,
+                mean_norm,
+                edge_density,
+                blank_quads,
+                clipped_frac,
+                star_count,
+                median_hfr_px,
+            ) = if img.cpp >= 4 {
+                // 4-plane Pixel Shift (.ARQ / 4-plane Linear DNG): [0=R, 1=G1, 2=B, 3=G2]
+                let p2 = eval_linear_component(img, x0, y0, w, h, 3, 2);
+                let hfr = match (p1.median_hfr_px, p2.median_hfr_px) {
+                    (Some(a), Some(b)) => Some(0.5 * (a + b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                };
+                (
+                    0.5 * (p1.score + p2.score),
+                    p1.score,
+                    p2.score,
+                    0.5 * (p1.mean_norm + p2.mean_norm),
+                    0.5 * (p1.edge_density + p2.edge_density),
+                    p1.blank_quads.max(p2.blank_quads),
+                    0.5 * (p1.clipped_frac + p2.clipped_frac),
+                    p1.star_count.max(p2.star_count),
+                    hfr,
+                )
+            } else {
+                (
+                    p1.score,
+                    p1.score,
+                    p1.score,
+                    p1.mean_norm,
+                    p1.edge_density,
+                    p1.blank_quads,
+                    p1.clipped_frac,
+                    p1.star_count,
+                    p1.median_hfr_px,
+                )
+            };
+            let validity = classify_validity(
+                mean_norm,
+                edge_density,
+                blank_quads,
+                clipped_frac,
+                star_count,
+            );
             GridCellMetrics {
                 id,
                 row,
@@ -517,16 +649,16 @@ fn evaluate_rect(
                 norm_x,
                 norm_y,
                 sensor_rect: [x0 as u32, y0 as u32, w as u32, h as u32],
-                sharpness: p.score,
-                sharpness_g1: p.score,
-                sharpness_g2: p.score,
+                sharpness,
+                sharpness_g1,
+                sharpness_g2,
                 relative_to_center: 1.0,
-                mean_signal_norm: p.mean_norm,
-                edge_density: p.edge_density,
-                clipped_fraction: p.clipped_frac,
+                mean_signal_norm: mean_norm,
+                edge_density,
+                clipped_fraction: clipped_frac,
                 validity,
-                star_count: p.star_count,
-                median_star_hfr_px: p.median_hfr_px,
+                star_count,
+                median_star_hfr_px: median_hfr_px,
             }
         }
         MosaicKind::XTrans6x6 | MosaicKind::OtherSinglePlane => {
@@ -534,8 +666,13 @@ fn evaluate_rect(
             let qw = w / 2;
             let qh = h / 2;
             let p = eval_generic_green_blocks(img, x0, y0, qw, qh);
-            let validity =
-                classify_validity(p.mean_norm, p.edge_density, p.clipped_frac, p.star_count);
+            let validity = classify_validity(
+                p.mean_norm,
+                p.edge_density,
+                p.blank_quads,
+                p.clipped_frac,
+                p.star_count,
+            );
             GridCellMetrics {
                 id,
                 row,
@@ -562,6 +699,7 @@ struct SubplaneResult {
     score: f64,
     mean_norm: f64,
     edge_density: f64,
+    blank_quads: u8,
     clipped_frac: f64,
     star_count: u32,
     median_hfr_px: Option<f64>,
@@ -570,6 +708,7 @@ struct SubplaneResult {
 fn classify_validity(
     mean_norm: f64,
     edge_density: f64,
+    blank_quads: u8,
     clipped_frac: f64,
     star_count: u32,
 ) -> CellValidity {
@@ -577,7 +716,7 @@ fn classify_validity(
         CellValidity::Clipped
     } else if mean_norm < 0.006 && star_count == 0 {
         CellValidity::Underexposed
-    } else if edge_density < 0.006 && star_count < 2 {
+    } else if (edge_density < 0.006 || blank_quads >= 2) && star_count < 2 {
         CellValidity::LowTexture
     } else {
         CellValidity::Valid
@@ -600,6 +739,7 @@ fn eval_green_subplane(
             score: 0.0,
             mean_norm: 0.0,
             edge_density: 0.0,
+            blank_quads: 4,
             clipped_frac: 0.0,
             star_count: 0,
             median_hfr_px: None,
@@ -634,15 +774,29 @@ fn eval_green_subplane(
     eval_scalar_plane(&plane, qw, qh, sum_adu, clipped_cnt, span, clip_ceil as f32)
 }
 
-fn eval_linear_green(
+fn eval_linear_component(
     img: &DecodedRawImage,
     x0: usize,
     y0: usize,
     w: usize,
     h: usize,
+    comp_idx: usize,
+    ch_idx: usize,
 ) -> SubplaneResult {
-    let bl = img.black_levels[1] as f64;
-    let span = (img.white_levels[1] as f64 - bl).max(1.0);
+    if w < 4 || h < 4 {
+        return SubplaneResult {
+            score: 0.0,
+            mean_norm: 0.0,
+            edge_density: 0.0,
+            blank_quads: 4,
+            clipped_frac: 0.0,
+            star_count: 0,
+            median_hfr_px: None,
+        };
+    }
+
+    let bl = img.black_levels[ch_idx] as f64;
+    let span = (img.white_levels[ch_idx] as f64 - bl).max(1.0);
     let clip_ceil = 0.975 * span;
 
     let mut plane = vec![0.0f32; w * h];
@@ -651,7 +805,7 @@ fn eval_linear_green(
 
     for r in 0..h {
         for c in 0..w {
-            let raw = img.active_sample(x0 + c, y0 + r, 1) as f64;
+            let raw = img.active_sample(x0 + c, y0 + r, comp_idx) as f64;
             let net = (raw - bl).max(0.0);
             if net >= clip_ceil {
                 clipped_cnt += 1;
@@ -756,15 +910,20 @@ fn eval_scalar_plane(
     // Use 4.0x expected noise energy as dead-zone threshold to reject flat-area shot/read noise.
     let noise_energy_thresh = 96.0 * sigma_noise * sigma_noise;
 
-    // 2. Sobel 3x3 Tenengrad energy over interior unclipped stencils.
+    // 2. Sobel 3x3 Tenengrad energy over interior unclipped stencils + 2x2 quadrant coverage.
     let mut grad_energy_sum = 0.0f64;
     let mut valid_stencils = 0usize;
     let mut edge_pixels = 0usize;
+    let mut quad_valid = [0usize; 4];
+    let mut quad_edges = [0usize; 4];
+    let mid_r = h / 2;
+    let mid_c = w / 2;
 
     for r in 1..h - 1 {
         let r0 = (r - 1) * w;
         let r1 = r * w;
         let r2 = (r + 1) * w;
+        let qy = usize::from(r >= mid_r) * 2;
         for c in 1..w - 1 {
             let tl = plane[r0 + c - 1];
             let tc = plane[r0 + c];
@@ -786,7 +945,9 @@ fn eval_scalar_plane(
                 continue;
             }
 
+            let q = qy + usize::from(c >= mid_c);
             valid_stencils += 1;
+            quad_valid[q] += 1;
             let gx = (tr + 2.0 * mr + br) as f64 - (tl + 2.0 * ml + bl) as f64;
             let gy = (bl + 2.0 * bc + br) as f64 - (tl + 2.0 * tc + tr) as f64;
             let g2 = gx * gx + gy * gy;
@@ -794,7 +955,15 @@ fn eval_scalar_plane(
             if g2 > noise_energy_thresh {
                 grad_energy_sum += g2 - noise_energy_thresh;
                 edge_pixels += 1;
+                quad_edges[q] += 1;
             }
+        }
+    }
+
+    let mut blank_quads = 0u8;
+    for q in 0..4 {
+        if quad_valid[q] >= 8 && (quad_edges[q] as f64 / quad_valid[q] as f64) < 0.003 {
+            blank_quads += 1;
         }
     }
 
@@ -826,6 +995,7 @@ fn eval_scalar_plane(
         score,
         mean_norm,
         edge_density,
+        blank_quads,
         clipped_frac,
         star_count,
         median_hfr_px,
@@ -855,7 +1025,7 @@ fn estimate_star_hfr(
             if center < peak_thresh || center >= clip_ceil {
                 continue;
             }
-            // Strict local maximum in 5x5 neighborhood.
+            // Strict local maximum in 5x5 neighborhood, and reject saturated cores touching clip_ceil.
             let mut is_max = true;
             'nbr: for dy in -2isize..=2 {
                 for dx in -2isize..=2 {
@@ -863,7 +1033,10 @@ fn estimate_star_hfr(
                         continue;
                     }
                     let nv = plane[((r as isize + dy) as usize) * w + (c as isize + dx) as usize];
-                    if nv > center || (nv == center && (dy < 0 || (dy == 0 && dx < 0))) {
+                    if (dx.abs() <= 1 && dy.abs() <= 1 && nv >= clip_ceil)
+                        || nv > center
+                        || (nv == center && (dy < 0 || (dy == 0 && dx < 0)))
+                    {
                         is_max = false;
                         break 'nbr;
                     }
@@ -903,6 +1076,31 @@ fn estimate_star_hfr(
                 continue;
             }
 
+            // Reject single/double hot pixels and Gaussian noise spikes: a genuine optical PSF
+            // illuminates multiple immediate 8-connected neighbors (`1 <= dx^2 + dy^2 <= 2`).
+            let nbr_thresh = (2.5 * sigma as f64).max(0.04 * net_peak);
+            let mut inner_ring_unclipped = 0.0f64;
+            let mut active_nbrs = 0u32;
+            for dy in -1isize..=1 {
+                for dx in -1isize..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let v = plane[((r as isize + dy) as usize) * w + (c as isize + dx) as usize]
+                        as f64
+                        - local_bg;
+                    inner_ring_unclipped += v;
+                    if v >= nbr_thresh {
+                        active_nbrs += 1;
+                    }
+                }
+            }
+            if active_nbrs < 3 || inner_ring_unclipped < (8.0 * sigma as f64).max(0.22 * net_peak)
+            {
+                continue;
+            }
+
+            let wing_floor = 2.0 * sigma as f64;
             for dy in -rad..=rad {
                 for dx in -rad..=rad {
                     let dist = ((dx * dx + dy * dy) as f64).sqrt();
@@ -911,7 +1109,7 @@ fn estimate_star_hfr(
                             plane[((r as isize + dy) as usize) * w + (c as isize + dx) as usize]
                                 as f64
                                 - local_bg;
-                        if val > 0.0 {
+                        if val > 0.0 && (dist <= 1.5 || val > wing_floor) {
                             flux_sum += val;
                             r_flux_sum += val * dist;
                         }
@@ -949,39 +1147,43 @@ fn estimate_star_hfr(
 fn fit_tilt_and_curvature(
     grid_3x3: &[GridCellMetrics],
     grid_5x5: &[GridCellMetrics],
+    include_5x5: bool,
 ) -> (f64, f64, f64) {
     let mut samples: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(34);
 
-    let center_3 = grid_3x3
+    let (center_3, c3_ok) = grid_3x3
         .get(4)
-        .map(|c| c.sharpness)
-        .unwrap_or(0.0)
-        .max(1e-9);
-    for c in grid_3x3 {
-        if c.validity == CellValidity::Valid && center_3 > 1e-6 {
-            let u = (c.norm_x as f64 - 0.5) * 2.0;
-            let v = (c.norm_y as f64 - 0.5) * 2.0;
-            let r = (c.sharpness / center_3).clamp(0.0, 2.5);
-            samples.push((u, v, r, 1.5));
+        .map(|c| (c.sharpness, c.validity == CellValidity::Valid && c.sharpness > 1e-6))
+        .unwrap_or((0.0, false));
+    if c3_ok {
+        for c in grid_3x3 {
+            if c.validity == CellValidity::Valid && c.norm_x.is_finite() && c.norm_y.is_finite() {
+                let u = (c.norm_x as f64 - 0.5) * 2.0;
+                let v = (c.norm_y as f64 - 0.5) * 2.0;
+                let r = (c.sharpness / center_3).clamp(0.0, 2.5);
+                samples.push((u, v, r, 1.5));
+            }
         }
     }
 
-    let center_5 = grid_5x5
-        .get(12)
-        .map(|c| c.sharpness)
-        .unwrap_or(0.0)
-        .max(1e-9);
-    let valid_5 = grid_5x5
-        .iter()
-        .filter(|c| c.validity == CellValidity::Valid)
-        .count();
-    if valid_5 >= 10 && center_5 > 1e-6 {
-        for c in grid_5x5 {
-            if c.validity == CellValidity::Valid {
-                let u = (c.norm_x as f64 - 0.5) * 2.0;
-                let v = (c.norm_y as f64 - 0.5) * 2.0;
-                let r = (c.sharpness / center_5).clamp(0.0, 2.5);
-                samples.push((u, v, r, 0.8));
+    if include_5x5 {
+        let (center_5, c5_ok) = grid_5x5
+            .get(12)
+            .map(|c| (c.sharpness, c.validity == CellValidity::Valid && c.sharpness > 1e-6))
+            .unwrap_or((0.0, false));
+        let valid_5 = grid_5x5
+            .iter()
+            .filter(|c| c.validity == CellValidity::Valid)
+            .count();
+        if valid_5 >= 10 && c5_ok {
+            for c in grid_5x5 {
+                if c.validity == CellValidity::Valid && c.norm_x.is_finite() && c.norm_y.is_finite()
+                {
+                    let u = (c.norm_x as f64 - 0.5) * 2.0;
+                    let v = (c.norm_y as f64 - 0.5) * 2.0;
+                    let r = (c.sharpness / center_5).clamp(0.0, 2.5);
+                    samples.push((u, v, r, 0.8));
+                }
             }
         }
     }
@@ -990,12 +1192,26 @@ fn fit_tilt_and_curvature(
         return (0.0, 0.0, 0.0);
     }
 
+    let mut min_u = f64::INFINITY;
+    let mut max_u = f64::NEG_INFINITY;
+    let mut min_v = f64::INFINITY;
+    let mut max_v = f64::NEG_INFINITY;
+    let mut min_q = f64::INFINITY;
+    let mut max_q = f64::NEG_INFINITY;
+
     // Normal equations A^T W A beta = A^T W y for basis [1, u, v, (u^2 + v^2)/2].
     let mut ata = [[0.0f64; 4]; 4];
     let mut aty = [0.0f64; 4];
 
-    for (u, v, y, w) in samples {
+    for &(u, v, y, w) in &samples {
         let q = 0.5 * (u * u + v * v);
+        min_u = min_u.min(u);
+        max_u = max_u.max(u);
+        min_v = min_v.min(v);
+        max_v = max_v.max(v);
+        min_q = min_q.min(q);
+        max_q = max_q.max(q);
+
         let basis = [1.0, u, v, q];
         for i in 0..4 {
             aty[i] += w * basis[i] * y;
@@ -1004,17 +1220,24 @@ fn fit_tilt_and_curvature(
             }
         }
     }
-    // Mild Tikhonov regularization for numerical stability when some stations are missing.
-    for (i, row) in ata.iter_mut().enumerate() {
-        row[i] += 1e-4;
-    }
+
+    // Do NOT penalize the constant intercept `beta[0]` (which previously leaked intercept into
+    // `tx`/`ty` when valid stations were collinear on a single horizon row/col!).
+    ata[0][0] += 1e-12;
+    ata[1][1] += if max_u - min_u < 0.25 { 1e6 } else { 1e-3 };
+    ata[2][2] += if max_v - min_v < 0.25 { 1e6 } else { 1e-3 };
+    ata[3][3] += if max_q - min_q < 0.10 { 1e6 } else { 1e-3 };
 
     if let Some(beta) = solve_4x4(ata, aty) {
         let tx = beta[1];
         let ty = beta[2];
         // Positive `radial_falloff` means sharpness decreases from center toward corners.
         let radial_falloff = -beta[3];
-        (tx, ty, radial_falloff)
+        if tx.is_finite() && ty.is_finite() && radial_falloff.is_finite() {
+            (tx, ty, radial_falloff)
+        } else {
+            (0.0, 0.0, 0.0)
+        }
     } else {
         (0.0, 0.0, 0.0)
     }
@@ -1030,7 +1253,7 @@ fn solve_4x4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
                 pivot = r;
             }
         }
-        if max_v < 1e-10 {
+        if !max_v.is_finite() || max_v < 1e-10 {
             return None;
         }
         if pivot != col {
@@ -1038,32 +1261,39 @@ fn solve_4x4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
             b.swap(col, pivot);
         }
         let diag = a[col][col];
-        for j in col..4 {
-            a[col][j] /= diag;
+        for item in a[col].iter_mut().skip(col) {
+            *item /= diag;
         }
         b[col] /= diag;
 
+        let pivot_row = a[col];
+        let pivot_b = b[col];
         for r in 0..4 {
             if r != col {
                 let factor = a[r][col];
-                for j in col..4 {
-                    a[r][j] -= factor * a[col][j];
+                for (dst, &piv) in a[r].iter_mut().zip(pivot_row.iter()).skip(col) {
+                    *dst -= factor * piv;
                 }
-                b[r] -= factor * b[col];
+                b[r] -= factor * pivot_b;
             }
         }
     }
-    Some(b)
+    if b.iter().all(|v| v.is_finite()) {
+        Some(b)
+    } else {
+        None
+    }
 }
 
-fn normalize_deg(mut deg: f64) -> f64 {
-    while deg > 180.0 {
-        deg -= 360.0;
+fn normalize_deg(deg: f64) -> f64 {
+    if !deg.is_finite() {
+        return 0.0;
     }
-    while deg <= -180.0 {
-        deg += 360.0;
+    let mut wrapped = (deg + 180.0).rem_euclid(360.0) - 180.0;
+    if wrapped <= -180.0 {
+        wrapped += 360.0;
     }
-    deg
+    wrapped
 }
 
 fn direction_label(angle_deg: f64, mag: f64) -> String {

@@ -27,32 +27,52 @@ const CHANNEL_COLORS: Record<'R' | 'G1' | 'G2' | 'B', string> = {
   B: 'hsl(201, 86%, 58%)',
 };
 
+function formatIsoText(iso: number): string {
+  return iso > 0 ? `ISO ${iso}` : 'ISO 未知';
+}
+
 function readChannelNoise(
   f: DarkFrameReport,
   ch: 'mean' | 'R' | 'G1' | 'G2' | 'B',
   axisMode: NoiseAxisMode,
 ): number {
+  const rawVal =
+    ch === 'mean'
+      ? f.meanReadNoiseAdu
+      : f.channels[ch === 'R' ? 0 : ch === 'G1' ? 1 : ch === 'G2' ? 2 : 3]
+          .readNoiseAdu;
+  const safeRaw = Number.isFinite(rawVal) && rawVal >= 0 ? rawVal : 0;
+
+  if (axisMode !== 'iso100_norm') {
+    return safeRaw;
+  }
   if (ch === 'mean') {
-    return axisMode === 'iso100_norm'
-      ? (f.meanReadNoiseIso100Norm ??
-          f.meanReadNoiseAdu * (100 / Math.max(1, f.iso)))
-      : f.meanReadNoiseAdu;
+    if (
+      f.meanReadNoiseIso100Norm !== null &&
+      Number.isFinite(f.meanReadNoiseIso100Norm)
+    ) {
+      return Math.max(0, f.meanReadNoiseIso100Norm);
+    }
+    return f.iso > 0 ? safeRaw * (100 / f.iso) : safeRaw;
   }
   const idx = ch === 'R' ? 0 : ch === 'G1' ? 1 : ch === 'G2' ? 2 : 3;
-  const stats = f.channels[idx];
-  return axisMode === 'iso100_norm'
-    ? (stats.readNoiseIso100Norm ??
-        stats.readNoiseAdu * (100 / Math.max(1, f.iso)))
-    : stats.readNoiseAdu;
+  const norm = f.channels[idx].readNoiseIso100Norm;
+  if (norm !== null && Number.isFinite(norm)) {
+    return Math.max(0, norm);
+  }
+  return f.iso > 0 ? safeRaw * (100 / f.iso) : safeRaw;
 }
 
 function getFrameChannelDr(
   f: DarkFrameReport,
   ch: 'mean' | 'R' | 'G1' | 'G2' | 'B',
 ): number {
-  if (ch === 'mean') return f.meanEngineeringDrEv;
-  const idx = ch === 'R' ? 0 : ch === 'G1' ? 1 : ch === 'G2' ? 2 : 3;
-  return f.channels[idx].engineeringDrEv;
+  const val =
+    ch === 'mean'
+      ? f.meanEngineeringDrEv
+      : f.channels[ch === 'R' ? 0 : ch === 'G1' ? 1 : ch === 'G2' ? 2 : 3]
+          .engineeringDrEv;
+  return Number.isFinite(val) ? val : 0;
 }
 
 function triggerDownload(filename: string, mime: string, content: string) {
@@ -70,11 +90,21 @@ function triggerDownload(filename: string, mime: string, content: string) {
 export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
   const [channelView, setChannelView] = useState<ChannelView>('mean');
   const [noiseAxisMode, setNoiseAxisMode] = useState<NoiseAxisMode>('raw_adu');
-  const [selectedIdx, setSelectedIdx] = useState<number>(0);
+  const [selectedFrameKey, setSelectedFrameKey] = useState<string | null>(null);
 
   const frames = series.frames;
-  const activeFrame: DarkFrameReport | undefined =
-    frames[Math.min(selectedIdx, Math.max(0, frames.length - 1))];
+  const safeSelectedIdx = useMemo(() => {
+    if (frames.length === 0) return 0;
+    if (selectedFrameKey !== null) {
+      const idx = frames.findIndex(
+        (f) => `${f.filename}::${f.iso}` === selectedFrameKey,
+      );
+      if (idx >= 0) return idx;
+    }
+    return 0;
+  }, [frames, selectedFrameKey]);
+
+  const activeFrame: DarkFrameReport | undefined = frames[safeSelectedIdx];
 
   const getFrameChannelNoise = useCallback(
     (f: DarkFrameReport, ch: 'mean' | 'R' | 'G1' | 'G2' | 'B') =>
@@ -82,7 +112,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
     [noiseAxisMode],
   );
 
-  // Compute SVG chart geometry & scales
+  // Compute SVG chart geometry, per-ISO aggregated curve buckets & duplicate-ISO node offsets
   const chartGeom = useMemo(() => {
     const W = 860;
     const H = 370;
@@ -97,25 +127,52 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       return null;
     }
 
-    const logIsos = frames.map((f) => Math.log2(Math.max(25, f.iso)));
-    let minLogIso = Math.min(...logIsos);
-    let maxLogIso = Math.max(...logIsos);
-    if (maxLogIso - minLogIso < 0.5) {
-      minLogIso -= 0.5;
-      maxLogIso += 0.5;
+    const knownIsos = Array.from(
+      new Set(frames.filter((f) => f.iso > 0).map((f) => f.iso)),
+    ).sort((a, b) => a - b);
+    const hasUnknownIso = frames.some((f) => f.iso <= 0);
+
+    let minLogIso: number;
+    let maxLogIso: number;
+    let unknownLogPos: number;
+
+    if (knownIsos.length > 0) {
+      const logKnown = knownIsos.map((iso) => Math.log2(iso));
+      minLogIso = Math.min(...logKnown);
+      maxLogIso = Math.max(...logKnown);
+      if (maxLogIso - minLogIso < 0.5) {
+        minLogIso -= 0.5;
+        maxLogIso += 0.5;
+      }
+      if (hasUnknownIso) {
+        const extra = Math.max(0.85, (maxLogIso - minLogIso) * 0.22);
+        unknownLogPos = maxLogIso + extra * 0.78;
+        maxLogIso += extra;
+      } else {
+        unknownLogPos = maxLogIso;
+      }
+    } else {
+      minLogIso = -0.5;
+      maxLogIso = 0.5;
+      unknownLogPos = 0;
     }
 
+    const NOISE_LOG_FLOOR = 1e-3;
     const allNoiseVals: number[] = [];
     const allDrVals: number[] = [];
 
     for (const f of frames) {
       if (channelView === 'all_channels') {
         (['R', 'G1', 'G2', 'B'] as const).forEach((c) => {
-          allNoiseVals.push(Math.max(0.05, getFrameChannelNoise(f, c)));
+          allNoiseVals.push(
+            Math.max(NOISE_LOG_FLOOR, getFrameChannelNoise(f, c)),
+          );
           allDrVals.push(getFrameChannelDr(f, c));
         });
       } else {
-        allNoiseVals.push(Math.max(0.05, getFrameChannelNoise(f, channelView)));
+        allNoiseVals.push(
+          Math.max(NOISE_LOG_FLOOR, getFrameChannelNoise(f, channelView)),
+        );
         allDrVals.push(getFrameChannelDr(f, channelView));
       }
     }
@@ -123,36 +180,48 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
     const logNoises = allNoiseVals.map((v) => Math.log2(v));
     let minLogNoise = Math.floor(Math.min(...logNoises) * 2) / 2 - 0.25;
     let maxLogNoise = Math.ceil(Math.max(...logNoises) * 2) / 2 + 0.35;
-    if (maxLogNoise - minLogNoise < 1) {
+    if (!Number.isFinite(minLogNoise) || !Number.isFinite(maxLogNoise)) {
+      minLogNoise = -2;
+      maxLogNoise = 4;
+    } else if (maxLogNoise - minLogNoise < 1) {
+      minLogNoise -= 0.5;
       maxLogNoise = minLogNoise + 1;
     }
 
     let minDr = Math.floor(Math.min(...allDrVals)) - 0.5;
     let maxDr = Math.ceil(Math.max(...allDrVals)) + 0.5;
-    if (maxDr - minDr < 2) {
+    if (!Number.isFinite(minDr) || !Number.isFinite(maxDr)) {
+      minDr = 0;
+      maxDr = 14;
+    } else if (maxDr - minDr < 2) {
+      minDr -= 0.5;
       maxDr = minDr + 2;
     }
 
-    const xOfIso = (iso: number) =>
-      padL +
-      ((Math.log2(Math.max(25, iso)) - minLogIso) /
-        (maxLogIso - minLogIso)) *
-        plotW;
+    const logIsoSpan = Math.max(1e-6, maxLogIso - minLogIso);
+    const logNoiseSpan = Math.max(1e-6, maxLogNoise - minLogNoise);
+    const drSpan = Math.max(1e-6, maxDr - minDr);
 
-    const yOfNoise = (val: number) => {
-      const lv = Math.log2(Math.max(0.05, val));
-      return (
-        padT +
-        (1 - (lv - minLogNoise) / (maxLogNoise - minLogNoise)) * plotH
-      );
+    const xOfIso = (iso: number) => {
+      const lv = iso > 0 ? Math.log2(iso) : unknownLogPos;
+      return padL + ((lv - minLogIso) / logIsoSpan) * plotW;
     };
 
-    const yOfDr = (ev: number) =>
-      padT + (1 - (ev - minDr) / (maxDr - minDr)) * plotH;
+    const yOfNoise = (val: number) => {
+      const safe = Number.isFinite(val) && val > 0 ? val : NOISE_LOG_FLOOR;
+      const lv = Math.log2(Math.max(NOISE_LOG_FLOOR, safe));
+      return padT + (1 - (lv - minLogNoise) / logNoiseSpan) * plotH;
+    };
+
+    const yOfDr = (ev: number) => {
+      const safe = Number.isFinite(ev) ? ev : minDr;
+      return padT + (1 - (safe - minDr) / drSpan) * plotH;
+    };
 
     // Generate clean ticks
     const noiseTicks: number[] = [];
-    const stepLog = maxLogNoise - minLogNoise > 4.5 ? 1.0 : 0.5;
+    const stepLog =
+      logNoiseSpan > 8 ? 2.0 : logNoiseSpan > 4.5 ? 1.0 : 0.5;
     for (
       let lv = Math.ceil(minLogNoise / stepLog) * stepLog;
       lv <= maxLogNoise + 1e-6;
@@ -162,7 +231,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
     }
 
     const drTicks: number[] = [];
-    const stepDr = maxDr - minDr > 6 ? 2 : 1;
+    const stepDr = drSpan > 12 ? 3 : drSpan > 6 ? 2 : 1;
     for (
       let ev = Math.ceil(minDr / stepDr) * stepDr;
       ev <= maxDr + 1e-6;
@@ -171,9 +240,35 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       drTicks.push(ev);
     }
 
-    const uniqueIsos = Array.from(new Set(frames.map((f) => f.iso))).sort(
-      (a, b) => a - b,
-    );
+    const uniqueIsos = hasUnknownIso ? [...knownIsos, 0] : knownIsos;
+
+    // Group frames by ISO bucket for clean curve averaging + per-node horizontal jitter on duplicate ISOs
+    const bucketMap = new Map<number, number[]>();
+    frames.forEach((f, idx) => {
+      const arr = bucketMap.get(f.iso);
+      if (arr) {
+        arr.push(idx);
+      } else {
+        bucketMap.set(f.iso, [idx]);
+      }
+    });
+
+    const nodeXOffsets = new Float64Array(frames.length);
+    for (const indices of bucketMap.values()) {
+      if (indices.length > 1) {
+        const stepPx = Math.min(10, 38 / indices.length);
+        const mid = (indices.length - 1) * 0.5;
+        indices.forEach((frameIdx, rank) => {
+          nodeXOffsets[frameIdx] = (rank - mid) * stepPx;
+        });
+      }
+    }
+
+    // Only connect known positive ISOs on the continuous trend polyline (unknown ISO = 0 stays an isolated marker)
+    const curveBuckets = knownIsos.map((iso) => ({
+      iso,
+      indices: bucketMap.get(iso) ?? [],
+    }));
 
     return {
       W,
@@ -190,6 +285,8 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       noiseTicks,
       drTicks,
       uniqueIsos,
+      curveBuckets,
+      nodeXOffsets,
     };
   }, [frames, channelView, getFrameChannelNoise]);
 
@@ -234,9 +331,11 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
     const rows = frames.map((f) => [
       `"${f.filename.replace(/"/g, '""')}"`,
       `"${f.metadata.cameraLabel.replace(/"/g, '""')}"`,
-      f.iso,
+      f.iso > 0 ? f.iso : '',
       f.meanReadNoiseAdu.toFixed(4),
-      (f.meanReadNoiseIso100Norm ?? 0).toFixed(4),
+      f.meanReadNoiseIso100Norm !== null
+        ? f.meanReadNoiseIso100Norm.toFixed(4)
+        : '',
       f.meanEngineeringDrEv.toFixed(3),
       f.meanBlackOffsetAdu.toFixed(3),
       f.channels[0].readNoiseAdu.toFixed(4),
@@ -420,7 +519,11 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         fontFamily="JetBrains Mono, monospace"
                         fill="hsl(37, 88%, 62%)"
                       >
-                        {tv >= 10 ? tv.toFixed(1) : tv.toFixed(2)}
+                        {tv >= 10
+                          ? tv.toFixed(1)
+                          : tv >= 0.1
+                            ? tv.toFixed(2)
+                            : tv.toFixed(3)}
                       </text>
                     </g>
                   );
@@ -464,7 +567,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         fontFamily="JetBrains Mono, monospace"
                         fill="hsl(214, 12%, 68%)"
                       >
-                        {iso}
+                        {iso > 0 ? iso : '未知'}
                       </text>
                     </g>
                   );
@@ -537,98 +640,120 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   );
                 })}
 
-                {/* Curves */}
-                {channelView === 'all_channels' ? (
-                  (['R', 'G1', 'G2', 'B'] as const).map((ch) => {
-                    const noisePts = frames
-                      .map(
-                        (f) =>
-                          `${chartGeom.xOfIso(f.iso)},${chartGeom.yOfNoise(
-                            getFrameChannelNoise(f, ch),
-                          )}`,
-                      )
-                      .join(' ');
-                    const drPts = frames
-                      .map(
-                        (f) =>
-                          `${chartGeom.xOfIso(f.iso)},${chartGeom.yOfDr(
-                            getFrameChannelDr(f, ch),
-                          )}`,
-                      )
-                      .join(' ');
-                    return (
-                      <g key={ch}>
-                        <polyline
-                          fill="none"
-                          stroke={CHANNEL_COLORS[ch]}
-                          strokeWidth="2"
-                          points={noisePts}
-                        />
-                        <polyline
-                          fill="none"
-                          stroke={CHANNEL_COLORS[ch]}
-                          strokeWidth="1.4"
-                          strokeDasharray="5 4"
-                          opacity={0.75}
-                          points={drPts}
-                        />
-                      </g>
-                    );
-                  })
-                ) : (
-                  <>
-                    {/* Dynamic Range Curve (Right Axis, Dashed Optical Green) */}
-                    <polyline
-                      fill="none"
-                      stroke="hsl(152, 62%, 48%)"
-                      strokeWidth="2"
-                      strokeDasharray="6 4"
-                      points={frames
-                        .map(
-                          (f) =>
-                            `${chartGeom.xOfIso(f.iso)},${chartGeom.yOfDr(
-                              getFrameChannelDr(f, channelView),
-                            )}`,
-                        )
-                        .join(' ')}
-                    />
+                {/* Per-ISO Mean Curves (when >= 2 distinct positive ISOs exist) */}
+                {chartGeom.curveBuckets.length >= 2 &&
+                  (channelView === 'all_channels' ? (
+                    (['R', 'G1', 'G2', 'B'] as const).map((ch) => {
+                      const noisePts = chartGeom.curveBuckets
+                        .map(({ iso, indices }) => {
+                          const meanNoise =
+                            indices.reduce(
+                              (acc, i) =>
+                                acc + getFrameChannelNoise(frames[i], ch),
+                              0,
+                            ) / Math.max(1, indices.length);
+                          return `${chartGeom.xOfIso(iso)},${chartGeom.yOfNoise(meanNoise)}`;
+                        })
+                        .join(' ');
+                      const drPts = chartGeom.curveBuckets
+                        .map(({ iso, indices }) => {
+                          const meanDr =
+                            indices.reduce(
+                              (acc, i) =>
+                                acc + getFrameChannelDr(frames[i], ch),
+                              0,
+                            ) / Math.max(1, indices.length);
+                          return `${chartGeom.xOfIso(iso)},${chartGeom.yOfDr(meanDr)}`;
+                        })
+                        .join(' ');
+                      return (
+                        <g key={ch}>
+                          <polyline
+                            fill="none"
+                            stroke={CHANNEL_COLORS[ch]}
+                            strokeWidth="2"
+                            points={noisePts}
+                          />
+                          <polyline
+                            fill="none"
+                            stroke={CHANNEL_COLORS[ch]}
+                            strokeWidth="1.4"
+                            strokeDasharray="5 4"
+                            opacity={0.75}
+                            points={drPts}
+                          />
+                        </g>
+                      );
+                    })
+                  ) : (
+                    <>
+                      {/* Dynamic Range Curve (Right Axis, Dashed Optical Green) */}
+                      <polyline
+                        fill="none"
+                        stroke="hsl(152, 62%, 48%)"
+                        strokeWidth="2"
+                        strokeDasharray="6 4"
+                        points={chartGeom.curveBuckets
+                          .map(({ iso, indices }) => {
+                            const meanDr =
+                              indices.reduce(
+                                (acc, i) =>
+                                  acc +
+                                  getFrameChannelDr(frames[i], channelView),
+                                0,
+                              ) / Math.max(1, indices.length);
+                            return `${chartGeom.xOfIso(iso)},${chartGeom.yOfDr(meanDr)}`;
+                          })
+                          .join(' ')}
+                      />
 
-                    {/* Read Noise Curve (Left Axis, Solid Amber or Channel Color) */}
-                    <polyline
-                      fill="none"
-                      stroke={
-                        channelView === 'mean'
-                          ? 'hsl(37, 88%, 56%)'
-                          : CHANNEL_COLORS[channelView]
-                      }
-                      strokeWidth="2.5"
-                      points={frames
-                        .map(
-                          (f) =>
-                            `${chartGeom.xOfIso(f.iso)},${chartGeom.yOfNoise(
-                              getFrameChannelNoise(f, channelView),
-                            )}`,
-                        )
-                        .join(' ')}
-                    />
-                  </>
-                )}
+                      {/* Read Noise Curve (Left Axis, Solid Amber or Channel Color) */}
+                      <polyline
+                        fill="none"
+                        stroke={
+                          channelView === 'mean'
+                            ? 'hsl(37, 88%, 56%)'
+                            : CHANNEL_COLORS[channelView]
+                        }
+                        strokeWidth="2.5"
+                        points={chartGeom.curveBuckets
+                          .map(({ iso, indices }) => {
+                            const meanNoise =
+                              indices.reduce(
+                                (acc, i) =>
+                                  acc +
+                                  getFrameChannelNoise(frames[i], channelView),
+                                0,
+                              ) / Math.max(1, indices.length);
+                            return `${chartGeom.xOfIso(iso)},${chartGeom.yOfNoise(meanNoise)}`;
+                          })
+                          .join(' ')}
+                      />
+                    </>
+                  ))}
 
                 {/* Interactive Data Nodes */}
                 {frames.map((f, idx) => {
                   const chKey =
                     channelView === 'all_channels' ? 'mean' : channelView;
-                  const x = chartGeom.xOfIso(f.iso);
+                  const x = Math.max(
+                    chartGeom.padL + 6,
+                    Math.min(
+                      chartGeom.W - chartGeom.padR - 6,
+                      chartGeom.xOfIso(f.iso) + chartGeom.nodeXOffsets[idx],
+                    ),
+                  );
                   const yn = chartGeom.yOfNoise(getFrameChannelNoise(f, chKey));
                   const yd = chartGeom.yOfDr(getFrameChannelDr(f, chKey));
-                  const isSel = idx === selectedIdx;
+                  const isSel = idx === safeSelectedIdx;
+                  const frameKey = `${f.filename}::${f.iso}`;
 
                   return (
                     <g
-                      key={`${f.filename}-${idx}`}
+                      key={frameKey}
                       className="cursor-pointer"
-                      onClick={() => setSelectedIdx(idx)}
-                      onMouseEnter={() => setSelectedIdx(idx)}
+                      onClick={() => setSelectedFrameKey(frameKey)}
+                      onMouseEnter={() => setSelectedFrameKey(frameKey)}
                     >
                       {isSel && (
                         <line
@@ -639,26 +764,48 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                           stroke="hsla(210, 20%, 95%, 0.18)"
                         />
                       )}
-                      <circle
-                        cx={x}
-                        cy={yd}
-                        r={isSel ? 5.5 : 4}
-                        fill="hsl(220, 20%, 6%)"
-                        stroke="hsl(152, 62%, 52%)"
-                        strokeWidth="2"
-                      />
-                      <circle
-                        cx={x}
-                        cy={yn}
-                        r={isSel ? 6 : 4.2}
-                        fill={
-                          isSel
-                            ? 'hsl(37, 92%, 60%)'
-                            : 'hsl(220, 20%, 6%)'
-                        }
-                        stroke="hsl(37, 88%, 56%)"
-                        strokeWidth="2.2"
-                      />
+                      {channelView === 'all_channels' ? (
+                        (['R', 'G1', 'G2', 'B'] as const).map((c) => (
+                          <circle
+                            key={c}
+                            cx={x}
+                            cy={chartGeom.yOfNoise(getFrameChannelNoise(f, c))}
+                            r={isSel ? 4.8 : 3.4}
+                            fill={
+                              isSel ? CHANNEL_COLORS[c] : 'hsl(220, 20%, 6%)'
+                            }
+                            stroke={CHANNEL_COLORS[c]}
+                            strokeWidth="1.8"
+                          />
+                        ))
+                      ) : (
+                        <>
+                          <circle
+                            cx={x}
+                            cy={yd}
+                            r={isSel ? 5.5 : 4}
+                            fill="hsl(220, 20%, 6%)"
+                            stroke="hsl(152, 62%, 52%)"
+                            strokeWidth="2"
+                          />
+                          <circle
+                            cx={x}
+                            cy={yn}
+                            r={isSel ? 6 : 4.2}
+                            fill={
+                              isSel
+                                ? 'hsl(37, 92%, 60%)'
+                                : 'hsl(220, 20%, 6%)'
+                            }
+                            stroke={
+                              channelView === 'mean'
+                                ? 'hsl(37, 88%, 56%)'
+                                : CHANNEL_COLORS[channelView]
+                            }
+                            strokeWidth="2.2"
+                          />
+                        </>
+                      )}
                     </g>
                   );
                 })}
@@ -676,7 +823,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   单帧四通道详细遥测（点击图表节点切换）
                 </div>
                 <div className="text-sm font-semibold text-[var(--text-primary)] mono-num mt-0.5">
-                  ISO {activeFrame.iso} · {activeFrame.filename}
+                  {formatIsoText(activeFrame.iso)} · {activeFrame.filename}
                 </div>
               </div>
               <span className="status-tag">
@@ -684,9 +831,15 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               </span>
             </div>
 
-            {/* Quality Alerts if Zero-Clipped or Light Leak */}
-            {(activeFrame.isZeroClipped || activeFrame.suspectedLightLeak) && (
-              <div className="p-2.5 rounded-lg bg-[var(--alert-coral-soft)] border border-[hsla(3,82%,63%,0.3)] text-xs text-[hsl(3,88%,75%)] space-y-1">
+            {/* Quality Alerts if Zero-Clipped, Light Leak, or Metadata/Thermal Notes */}
+            {activeFrame.qualityNotes.length > 0 && (
+              <div
+                className={`p-2.5 rounded-lg text-xs space-y-1 ${
+                  activeFrame.isZeroClipped || activeFrame.suspectedLightLeak
+                    ? 'bg-[var(--alert-coral-soft)] border border-[hsla(3,82%,63%,0.3)] text-[hsl(3,88%,75%)]'
+                    : 'bg-[var(--bg-surface-1)] border border-[var(--hairline-default)] text-[var(--text-secondary)]'
+                }`}
+              >
                 <div className="font-semibold flex items-center gap-1.5">
                   <AlertTriangle size={13} />
                   <span>暗帧数据完整性提示</span>
@@ -741,7 +894,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             </div>
 
             {/* G1 Black-Level ADU Histogram Bell-Curve Micro-Plot */}
-            {activeFrame.g1HistogramWindow.length > 1 && (
+            {activeFrame.g1HistogramWindow.length >= 1 && (
               <div className="space-y-1.5 pt-1">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-[var(--text-secondary)] font-medium">
@@ -755,8 +908,11 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                 {(() => {
                   const bins = activeFrame.g1HistogramWindow;
                   const maxCnt = Math.max(1, ...bins.map((b) => b[1]));
-                  const minAdu = bins[0][0];
-                  const maxAdu = bins[bins.length - 1][0];
+                  const rawMin = bins[0][0];
+                  const rawMax = bins[bins.length - 1][0];
+                  const minAdu =
+                    rawMin === rawMax ? Math.max(0, rawMin - 4) : rawMin;
+                  const maxAdu = rawMin === rawMax ? rawMax + 4 : rawMax;
                   const span = Math.max(1, maxAdu - minAdu + 1);
                   const blAdu = activeFrame.channels[1].nominalBlackLevel;
                   const blX = ((blAdu - minAdu + 0.5) / span) * 320;
@@ -844,51 +1000,64 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               </tr>
             </thead>
             <tbody>
-              {frames.map((f, idx) => (
-                <tr
-                  key={`${f.filename}-${idx}`}
-                  onClick={() => setSelectedIdx(idx)}
-                  className="cursor-pointer"
-                  style={
-                    idx === selectedIdx
-                      ? { background: 'hsla(37, 88%, 56%, 0.08)' }
-                      : undefined
-                  }
-                >
-                  <td className="font-semibold text-[var(--text-primary)]">
-                    ISO {f.iso}
-                  </td>
-                  <td className="font-sans text-xs">{f.filename}</td>
-                  <td>{f.channels[1].nominalBlackLevel.toFixed(1)}</td>
-                  <td>
-                    {f.meanBlackOffsetAdu >= 0 ? '+' : ''}
-                    {f.meanBlackOffsetAdu.toFixed(2)}
-                  </td>
-                  <td>{f.channels[0].readNoiseAdu.toFixed(3)}</td>
-                  <td>{f.channels[1].readNoiseAdu.toFixed(3)}</td>
-                  <td>{f.channels[2].readNoiseAdu.toFixed(3)}</td>
-                  <td>{f.channels[3].readNoiseAdu.toFixed(3)}</td>
-                  <td className="font-semibold text-[var(--accent-amber)]">
-                    {f.meanReadNoiseAdu.toFixed(3)}
-                  </td>
-                  <td>{(f.meanReadNoiseIso100Norm ?? 0).toFixed(3)}</td>
-                  <td className="font-semibold text-[var(--optical-green)]">
-                    {f.meanEngineeringDrEv.toFixed(2)} EV
-                  </td>
-                  <td>
-                    {f.totalHotPixels} ({f.totalHotPixelPpm.toFixed(1)} ppm)
-                  </td>
-                  <td className="font-sans">
-                    {f.isZeroClipped ? (
-                      <span className="status-tag status-tag--crit">零点截断</span>
-                    ) : f.suspectedLightLeak ? (
-                      <span className="status-tag status-tag--warn">疑似漏光</span>
-                    ) : (
-                      <span className="status-tag status-tag--pass">纯净暗帧</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {frames.map((f, idx) => {
+                const frameKey = `${f.filename}::${f.iso}`;
+                return (
+                  <tr
+                    key={frameKey}
+                    onClick={() => setSelectedFrameKey(frameKey)}
+                    className="cursor-pointer"
+                    style={
+                      idx === safeSelectedIdx
+                        ? { background: 'hsla(37, 88%, 56%, 0.08)' }
+                        : undefined
+                    }
+                  >
+                    <td className="font-semibold text-[var(--text-primary)]">
+                      {formatIsoText(f.iso)}
+                    </td>
+                    <td className="font-sans text-xs">{f.filename}</td>
+                    <td>{f.channels[1].nominalBlackLevel.toFixed(1)}</td>
+                    <td>
+                      {f.meanBlackOffsetAdu >= 0 ? '+' : ''}
+                      {f.meanBlackOffsetAdu.toFixed(2)}
+                    </td>
+                    <td>{f.channels[0].readNoiseAdu.toFixed(3)}</td>
+                    <td>{f.channels[1].readNoiseAdu.toFixed(3)}</td>
+                    <td>{f.channels[2].readNoiseAdu.toFixed(3)}</td>
+                    <td>{f.channels[3].readNoiseAdu.toFixed(3)}</td>
+                    <td className="font-semibold text-[var(--accent-amber)]">
+                      {f.meanReadNoiseAdu.toFixed(3)}
+                    </td>
+                    <td>
+                      {f.meanReadNoiseIso100Norm !== null
+                        ? f.meanReadNoiseIso100Norm.toFixed(3)
+                        : '—'}
+                    </td>
+                    <td className="font-semibold text-[var(--optical-green)]">
+                      {f.meanEngineeringDrEv.toFixed(2)} EV
+                    </td>
+                    <td>
+                      {f.totalHotPixels} ({f.totalHotPixelPpm.toFixed(1)} ppm)
+                    </td>
+                    <td className="font-sans">
+                      {f.isZeroClipped ? (
+                        <span className="status-tag status-tag--crit">
+                          零点截断
+                        </span>
+                      ) : f.suspectedLightLeak ? (
+                        <span className="status-tag status-tag--warn">
+                          疑似漏光
+                        </span>
+                      ) : (
+                        <span className="status-tag status-tag--pass">
+                          纯净暗帧
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

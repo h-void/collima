@@ -200,21 +200,259 @@ impl DecodedRawImage {
     }
 }
 
+/// Safely probe whether an in-memory buffer is a Nikon High Efficiency (`HE` / `HE*`) `.NEF`
+/// codestream without panicking on truncated, unaligned, big/little-endian, or cyclic TIFF IFDs.
+pub fn is_nikon_he_nef(bytes: &[u8]) -> bool {
+    matches!(validate_tiff_ifd_structure(bytes), Some(true))
+}
+
+/// Non-panicking bounds-checked and cycle-checked TIFF (`II` / `MM`) IFD + SubIFD walker.
+/// Returns `None` if the TIFF header/IFD graph is truncated or cyclic; otherwise returns
+/// `Some(is_nikon_he)` indicating whether `Make` starts with `"NIKON"` and any IFD/SubIFD carries
+/// Nikon HE / TicoRAW (`Compression == 52546` or JPEG XS strip magic `FF 10 FF 50`).
+fn validate_tiff_ifd_structure(bytes: &[u8]) -> Option<bool> {
+    if bytes.len() < 16 {
+        return None;
+    }
+    let le = match &bytes[0..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let read_u16 = |off: usize| -> Option<u16> {
+        let s = bytes.get(off..off.checked_add(2)?)?;
+        let arr = [s[0], s[1]];
+        Some(if le {
+            u16::from_le_bytes(arr)
+        } else {
+            u16::from_be_bytes(arr)
+        })
+    };
+    let read_u32 = |off: usize| -> Option<u32> {
+        let s = bytes.get(off..off.checked_add(4)?)?;
+        let arr = [s[0], s[1], s[2], s[3]];
+        Some(if le {
+            u32::from_le_bytes(arr)
+        } else {
+            u32::from_be_bytes(arr)
+        })
+    };
+    let read_scalar_u32 = |ty: u16, cnt: usize, val_off: usize| -> Option<u32> {
+        if cnt != 1 {
+            return None;
+        }
+        match ty {
+            3 => read_u16(val_off).map(u32::from),
+            4 | 13 => read_u32(val_off),
+            _ => None,
+        }
+    };
+
+    if read_u16(2) != Some(42) {
+        return None;
+    }
+    let first_ifd = match read_u32(4) {
+        Some(off) if (off as usize) >= 8 && (off as usize) < bytes.len() => off,
+        _ => return None,
+    };
+
+    let mut is_nikon = false;
+    let mut has_tico_marker = false;
+
+    // Bounded stack over IFD chain + SubIFD (0x014A) + ExifIFD (0x8769) pointers with cycle guard.
+    let mut visited = [0u32; 64];
+    let mut visited_len = 0usize;
+    let mut stack = [0u32; 64];
+    stack[0] = first_ifd;
+    let mut stack_len = 1usize;
+
+    while stack_len > 0 {
+        stack_len -= 1;
+        let ifd_off = stack[stack_len];
+        if ifd_off == 0 {
+            continue;
+        }
+        // Reject cyclic IFD / SubIFD pointers!
+        if visited[..visited_len].contains(&ifd_off) {
+            return None;
+        }
+        if visited_len >= visited.len() {
+            break;
+        }
+        visited[visited_len] = ifd_off;
+        visited_len += 1;
+
+        let base = ifd_off as usize;
+        let entry_count = read_u16(base)? as usize;
+        if entry_count > 4096 {
+            return None;
+        }
+        let entries_bytes = entry_count.checked_mul(12)?;
+        let next_ptr_pos = base.checked_add(2)?.checked_add(entries_bytes)?;
+        let ifd_end = next_ptr_pos.checked_add(4)?;
+        if ifd_end > bytes.len() {
+            return None;
+        }
+
+        for i in 0..entry_count {
+            let e_off = base + 2 + i * 12;
+            let tag = read_u16(e_off)?;
+            let ty = read_u16(e_off + 2)?;
+            let cnt = read_u32(e_off + 4)? as usize;
+
+            // Make (0x010F, ASCII)
+            if tag == 0x010F && ty == 2 && cnt >= 5 {
+                let str_pos = if cnt <= 4 {
+                    Some(e_off + 8)
+                } else {
+                    read_u32(e_off + 8).map(|p| p as usize)
+                };
+                if let Some(sp) = str_pos
+                    && let Some(slice) = bytes.get(sp..sp.saturating_add(5))
+                    && slice.eq_ignore_ascii_case(b"NIKON")
+                {
+                    is_nikon = true;
+                }
+            }
+
+            // Compression (0x0103): 52546 = TicoRAW / JPEG XS
+            if tag == 0x0103
+                && let Some(comp) = read_scalar_u32(ty, cnt, e_off + 8)
+                && comp == 52546
+            {
+                has_tico_marker = true;
+            }
+
+            // StripOffsets (0x0111): Nikon HE NEF stores Compression=34713 with JPEG XS SOC+CAP `FF 10 FF 50` at strip start.
+            if tag == 0x0111 && cnt >= 1 {
+                let strip_off_opt = if cnt == 1 {
+                    read_scalar_u32(ty, 1, e_off + 8).map(|v| v as usize)
+                } else if (ty == 4 || ty == 13) && cnt <= 65536 {
+                    read_u32(e_off + 8)
+                        .and_then(|arr| read_u32(arr as usize))
+                        .map(|v| v as usize)
+                } else {
+                    None
+                };
+                if let Some(so) = strip_off_opt
+                    && let Some(magic) = bytes.get(so..so.saturating_add(4))
+                    && magic == [0xFF, 0x10, 0xFF, 0x50]
+                {
+                    has_tico_marker = true;
+                }
+            }
+
+            // Validate SubIFDs (0x014A) and ExifIFD (0x8769) offsets so cyclic or truncated SubIFDs fail cleanly.
+            if (tag == 0x014A || tag == 0x8769) && (ty == 4 || ty == 13) && cnt > 0 && cnt <= 32 {
+                if cnt == 1 {
+                    if let Some(sub_off) = read_u32(e_off + 8)
+                        && sub_off > 0
+                    {
+                        if (sub_off as usize) < 8 || (sub_off as usize) >= bytes.len() {
+                            return None;
+                        }
+                        if visited[..visited_len].contains(&sub_off) {
+                            return None;
+                        }
+                        if stack_len < stack.len() {
+                            stack[stack_len] = sub_off;
+                            stack_len += 1;
+                        }
+                    }
+                } else if let Some(arr_off_u32) = read_u32(e_off + 8) {
+                    let arr_off = arr_off_u32 as usize;
+                    let arr_end = cnt.checked_mul(4)?.checked_add(arr_off)?;
+                    if arr_off < 8 || arr_end > bytes.len() {
+                        return None;
+                    }
+                    for k in 0..cnt {
+                        if let Some(sub_off) = read_u32(arr_off + k * 4)
+                            && sub_off > 0
+                        {
+                            if (sub_off as usize) < 8 || (sub_off as usize) >= bytes.len() {
+                                return None;
+                            }
+                            if visited[..visited_len].contains(&sub_off) {
+                                return None;
+                            }
+                            if stack_len < stack.len() {
+                                stack[stack_len] = sub_off;
+                                stack_len += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(next_ifd) = read_u32(next_ptr_pos)
+            && next_ifd != 0
+        {
+            if (next_ifd as usize) < 8 || (next_ifd as usize) >= bytes.len() {
+                return None;
+            }
+            if visited[..visited_len].contains(&next_ifd) {
+                return None;
+            }
+            if stack_len < stack.len() {
+                stack[stack_len] = next_ifd;
+                stack_len += 1;
+            }
+        }
+    }
+
+    Some(is_nikon && has_tico_marker)
+}
+
 /// Decode a RAW image strictly from an in-memory byte slice (`&[u8]`) with zero `std::fs` calls.
 pub fn decode_raw_bytes(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
     if bytes.len() < 64 {
         return Err(CollimaError::EmptyBuffer(bytes.len()));
     }
 
-    // 1. Check if this is a Nikon High Efficiency (HE / HE*) TicoRAW / JPEG XS .NEF file.
-    if let Ok(insp) = ticoraw::inspect_nef(bytes) {
-        if insp.codec == ticoraw::RawCodec::TicoRaw {
-            return decode_nikon_ticoraw(bytes, insp);
+    // Pre-validate standard little/big-endian TIFF IFD graphs so cyclic or truncated IFDs never hang or panic.
+    if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        match validate_tiff_ifd_structure(bytes) {
+            None => {
+                return Err(CollimaError::RawDecode(
+                    "Corrupt, truncated, or cyclic TIFF IFD header".to_string(),
+                ));
+            }
+            Some(true) => {
+                let insp = ticoraw::inspect_nef(bytes)
+                    .map_err(|e| CollimaError::TicoDecode(e.to_string()))?;
+                return decode_nikon_ticoraw(bytes, insp);
+            }
+            Some(false) => {}
         }
     }
 
-    // 2. General path via FlashRaw (~40 formats incl. Sony ARW6, Canon CR3, DNG, RAF, RW2, classic NEF).
+    // General path via FlashRaw (~40 formats incl. Sony ARW6, Canon CR3, DNG, RAF, RW2, classic NEF).
     decode_with_flashraw(bytes)
+}
+
+fn sanitize_levels(mut bl: [f32; 4], mut wl: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    for i in 0..4 {
+        if !bl[i].is_finite() {
+            bl[i] = 0.0;
+        } else {
+            bl[i] = bl[i].clamp(0.0, 65535.0);
+        }
+        if !wl[i].is_finite() || wl[i] <= 0.0 {
+            wl[i] = 16383.0;
+        } else {
+            wl[i] = wl[i].clamp(1.0, 65535.0);
+        }
+    }
+    (bl, wl)
+}
+
+fn sanitize_wb(wb: [f32; 3]) -> [f32; 3] {
+    if wb.iter().all(|v| v.is_finite() && *v > 1e-4 && *v < 64.0) {
+        [wb[0] / wb[1], 1.0, wb[2] / wb[1]]
+    } else {
+        [1.8, 1.0, 1.5]
+    }
 }
 
 fn decode_nikon_ticoraw(
@@ -232,6 +470,17 @@ fn decode_nikon_ticoraw(
 
     let raw_w = decoded.image.width;
     let raw_h = decoded.image.height;
+    let Some(expected_samples) = raw_w.checked_mul(raw_h) else {
+        return Err(CollimaError::InvalidActiveArea {
+            width: raw_w as u32,
+            height: raw_h as u32,
+        });
+    };
+    if raw_w < 4 || raw_h < 4 || decoded.image.pixels.len() < expected_samples {
+        return Err(CollimaError::TicoDecode(
+            "Decoded TicoRAW pixel buffer dimensions do not match sample count".into(),
+        ));
+    }
 
     let (mut ax, mut ay, mut aw, mut ah) = if let Some(crop) = decoded.crop {
         (crop.x, crop.y, crop.width, crop.height)
@@ -239,9 +488,9 @@ fn decode_nikon_ticoraw(
         (0, 0, raw_w, raw_h)
     };
 
-    // Align active area to 2x2 superpixel boundaries inside buffer bounds.
-    ax = ax.min(raw_w.saturating_sub(2));
-    ay = ay.min(raw_h.saturating_sub(2));
+    // Align active area to 2x2 superpixel boundaries inside buffer bounds (preserving odd ax/ay parity!).
+    ax = ax.min(raw_w.saturating_sub(4));
+    ay = ay.min(raw_h.saturating_sub(4));
     aw = aw.min(raw_w.saturating_sub(ax)) & !1;
     ah = ah.min(raw_h.saturating_sub(ay)) & !1;
     if aw < 4 || ah < 4 {
@@ -269,30 +518,32 @@ fn decode_nikon_ticoraw(
 
     // Map 2x2 black_level from buffer (0, 0) to canonical [R, G1, G2, B].
     let mut black_levels = [0.0f32; 4];
-    for ch in 0..4 {
+    for (ch, slot) in black_levels.iter_mut().enumerate() {
         let (dx, dy) = bayer_offsets.offset_for_channel(ch);
         let px = (ax + dx) & 1;
         let py = (ay + dy) & 1;
-        black_levels[ch] = decoded.color.black_level[py * 2 + px] as f32;
+        *slot = decoded.color.black_level[py * 2 + px] as f32;
     }
     let wl = decoded.color.white_level as f32;
-    let white_levels = [wl; 4];
+    let (black_levels, white_levels) = sanitize_levels(black_levels, [wl; 4]);
 
     // White balance from `as_shot_neutral` (reciprocal of camera neutral).
-    let wb_rgb = if let Some([(rn, rd), (gn, gd), (bn, bd)]) = decoded.color.as_shot_neutral {
-        let nr = if rd > 0 { rn as f32 / rd as f32 } else { 1.0 };
-        let ng = if gd > 0 { gn as f32 / gd as f32 } else { 1.0 };
-        let nb = if bd > 0 { bn as f32 / bd as f32 } else { 1.0 };
-        if nr > 1e-5 && ng > 1e-5 && nb > 1e-5 {
-            let r_mul = (1.0 / nr) / (1.0 / ng);
-            let b_mul = (1.0 / nb) / (1.0 / ng);
-            [r_mul, 1.0, b_mul]
+    let wb_rgb = sanitize_wb(
+        if let Some([(rn, rd), (gn, gd), (bn, bd)]) = decoded.color.as_shot_neutral {
+            let nr = if rd > 0 { rn as f32 / rd as f32 } else { 1.0 };
+            let ng = if gd > 0 { gn as f32 / gd as f32 } else { 1.0 };
+            let nb = if bd > 0 { bn as f32 / bd as f32 } else { 1.0 };
+            if nr > 1e-5 && ng > 1e-5 && nb > 1e-5 {
+                let r_mul = (1.0 / nr) / (1.0 / ng);
+                let b_mul = (1.0 / nb) / (1.0 / ng);
+                [r_mul, 1.0, b_mul]
+            } else {
+                [1.8, 1.0, 1.5]
+            }
         } else {
             [1.8, 1.0, 1.5]
-        }
-    } else {
-        [1.8, 1.0, 1.5]
-    };
+        },
+    );
 
     let cam_wb_to_srgb = if let Some(cm_rat) = decoded.color.color_matrix {
         let mut xyz_to_cam = [[0.0f64; 3]; 3];
@@ -316,10 +567,14 @@ fn decode_nikon_ticoraw(
             (
                 hm.lens.make.clone(),
                 hm.lens.model.clone(),
-                hm.exposure.iso,
-                hm.exposure.exposure_time,
-                hm.exposure.f_number,
-                hm.exposure.focal_length,
+                hm.exposure.iso.filter(|&v| v > 0),
+                hm.exposure
+                    .exposure_time
+                    .filter(|v| v.is_finite() && *v > 0.0),
+                hm.exposure.f_number.filter(|v| v.is_finite() && *v > 0.0),
+                hm.exposure
+                    .focal_length
+                    .filter(|v| v.is_finite() && *v > 0.0),
                 hm.capture_time.clone(),
             )
         } else {
@@ -365,7 +620,7 @@ fn decode_nikon_ticoraw(
         warnings,
     };
 
-    Ok(DecodedRawImage {
+    let mut img = DecodedRawImage {
         meta,
         stride: raw_w,
         buffer_height: raw_h,
@@ -378,7 +633,9 @@ fn decode_nikon_ticoraw(
         white_levels,
         wb_rgb,
         cam_wb_to_srgb,
-    })
+    };
+    apply_upright_orientation(&mut img);
+    Ok(img)
 }
 
 fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
@@ -412,6 +669,22 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
     let raw_h = frame.height as usize;
     let cpp = frame.cpp as usize;
 
+    if !matches!(cpp, 1 | 3 | 4) {
+        return Err(CollimaError::UnsupportedPixelData);
+    }
+    if raw_w < 4 || raw_h < 4 {
+        return Err(CollimaError::InvalidActiveArea {
+            width: frame.width,
+            height: frame.height,
+        });
+    }
+    let Some(expected_samples) = raw_w.checked_mul(raw_h).and_then(|n| n.checked_mul(cpp)) else {
+        return Err(CollimaError::InvalidActiveArea {
+            width: frame.width,
+            height: frame.height,
+        });
+    };
+
     let mut warnings: Vec<String> = frame.warnings.iter().map(|w| format!("{w:?}")).collect();
 
     // Use default crop if valid inside active_area, otherwise active_area, so optical borders &
@@ -424,18 +697,29 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         flashraw::Rect::full(frame.width, frame.height)
     };
 
-    let ax = (base_rect.x as usize).min(raw_w.saturating_sub(2));
-    let ay = (base_rect.y as usize).min(raw_h.saturating_sub(2));
+    let ax = (base_rect.x as usize).min(raw_w.saturating_sub(4));
+    let ay = (base_rect.y as usize).min(raw_h.saturating_sub(4));
     let mut aw = (base_rect.width as usize).min(raw_w.saturating_sub(ax));
     let mut ah = (base_rect.height as usize).min(raw_h.saturating_sub(ay));
 
     let (mosaic_kind, bayer_offsets, generic_cfa, cfa_pattern_str) = if cpp >= 3 {
-        warnings.push(
-            "Pre-demosaiced Linear RGB RAW (cpp >= 3): per-Bayer-channel noise separation reflects RGB planes rather than raw CFA photosites.".to_string(),
-        );
+        if cpp == 4 {
+            warnings.push(
+                "4-plane Pixel-Shift / Linear RAW (cpp == 4, [R, G1, B, G2]): G1 and G2 are evaluated on their independent full-resolution Green planes.".to_string(),
+            );
+        } else {
+            warnings.push(
+                "Pre-demosaiced Linear RGB RAW (cpp == 3): per-Bayer-channel noise separation reflects RGB planes rather than raw CFA photosites.".to_string(),
+            );
+        }
         aw &= !1;
         ah &= !1;
-        (MosaicKind::LinearRgb, None, None, "LinearRGB".to_string())
+        let label = if cpp == 4 {
+            "LinearRGB4".to_string()
+        } else {
+            "LinearRGB".to_string()
+        };
+        (MosaicKind::LinearRgb, None, None, label)
     } else if let Some(cfa) = &frame.cfa {
         if cfa.is_bayer() && frame.sensor_layout == SensorLayout::Bayer {
             aw &= !1;
@@ -501,14 +785,16 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
     }
 
     // Extract nominal black & white levels for canonical [R, G1, G2, B].
-    let (black_levels, white_levels) = if let Some(bo) = &bayer_offsets {
+    // Note: in `flashraw`, `cpp == 4` (e.g. Sony `.ARQ` Pixel Shift & 4-plane Linear DNG) stores
+    // components in `[0 = R, 1 = G1, 2 = B, 3 = G2]` order!
+    let (raw_bl, raw_wl) = if let Some(bo) = &bayer_offsets {
         let mut bl = [0.0f32; 4];
-        for ch in 0..4 {
+        for (ch, slot) in bl.iter_mut().enumerate() {
             let (dx, dy) = bo.offset_for_channel(ch);
-            // Average across representative rows/cols in case DNG/Canon row_deltas or col_deltas exist.
+            // Sample representative interior coordinates in case DNG/Canon row_deltas or col_deltas exist.
             let mid_x = ax + ((aw / 2) & !1) + dx;
             let mid_y = ay + ((ah / 2) & !1) + dy;
-            bl[ch] = frame.black_level.at(mid_x, mid_y, 0);
+            *slot = frame.black_level.at(mid_x, mid_y, 0);
         }
         let wl = [
             frame.white_level.at(CfaColor::Red as usize) as f32,
@@ -517,7 +803,21 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
             frame.white_level.at(CfaColor::Blue as usize) as f32,
         ];
         (bl, wl)
-    } else if cpp >= 3 {
+    } else if cpp >= 4 {
+        let bl = [
+            frame.black_level.at(ax, ay, 0),
+            frame.black_level.at(ax, ay, 1),
+            frame.black_level.at(ax, ay, 3),
+            frame.black_level.at(ax, ay, 2),
+        ];
+        let wl = [
+            frame.white_level.at(0) as f32,
+            frame.white_level.at(1) as f32,
+            frame.white_level.at(3) as f32,
+            frame.white_level.at(2) as f32,
+        ];
+        (bl, wl)
+    } else if cpp == 3 {
         let bl = [
             frame.black_level.at(ax, ay, 0),
             frame.black_level.at(ax, ay, 1),
@@ -533,19 +833,20 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         (bl, wl)
     } else {
         let b0 = frame.black_level.mean();
-        let w0 = frame.white_level.max().max(16383) as f32;
+        let w0 = frame.white_level.max().max(1) as f32;
         ([b0; 4], [w0; 4])
     };
+    let (black_levels, white_levels) = sanitize_levels(raw_bl, raw_wl);
 
     // White-balance multipliers [R, G, B].
-    let wb_rgb = if frame.white_balance_applied {
+    let wb_rgb = sanitize_wb(if frame.white_balance_applied {
         warnings.push(
             "Camera pre-applied white balance in RAW container (e.g. YCbCr M/S RAW or sRAW)."
                 .to_string(),
         );
         [1.0, 1.0, 1.0]
     } else if let Some(wb) = frame.white_balance {
-        [wb.coeffs[0], 1.0, wb.coeffs[2]]
+        [wb.coeffs[0], wb.coeffs[1].max(1e-5), wb.coeffs[2]]
     } else if let Some(cm) = frame.color_matrices.preferred() {
         if let Some(m) = cm.multipliers_for([1.0, 1.0, 1.0]) {
             if m.len() >= 3 && m[1] > 1e-5 {
@@ -558,14 +859,14 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         }
     } else {
         [1.8, 1.0, 1.5]
-    };
+    });
 
     let cam_wb_to_srgb = if let Some(cm) = frame.color_matrices.preferred() {
         if cm.rows >= 3 && cm.values.len() >= 9 {
             let mut xyz_to_cam = [[0.0f64; 3]; 3];
-            for r in 0..3 {
-                for c in 0..3 {
-                    xyz_to_cam[r][c] = cm.get(r, c) as f64;
+            for (r, row) in xyz_to_cam.iter_mut().enumerate() {
+                for (c, slot) in row.iter_mut().enumerate() {
+                    *slot = cm.get(r, c) as f64;
                 }
             }
             compute_cam_wb_to_srgb_matrix(&xyz_to_cam)
@@ -615,31 +916,61 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
     let camera_label = fm.camera();
     let lens_make = fm.lens.make.clone();
     let lens_model = fm.lens.model.clone();
-    let iso = fm.exposure.iso;
-    let exposure_time_sec = fm.exposure.exposure_time;
-    let shutter_display = fm.exposure.exposure_time.map(format_shutter_speed);
-    let f_number = fm.exposure.f_number;
-    let focal_length_mm = fm.exposure.focal_length;
+    let iso = fm.exposure.iso.filter(|&v| v > 0);
+    let exposure_time_sec = fm
+        .exposure
+        .exposure_time
+        .filter(|v| v.is_finite() && *v > 0.0);
+    let shutter_display = exposure_time_sec.map(format_shutter_speed);
+    let f_number = fm.exposure.f_number.filter(|v| v.is_finite() && *v > 0.0);
+    let focal_length_mm = fm
+        .exposure
+        .focal_length
+        .filter(|v| v.is_finite() && *v > 0.0);
     let capture_time = fm.capture_time.clone();
     let bits_per_sample = frame.bits_per_sample;
     let orientation_exif = frame.orientation.exif();
     let max_wl = frame.white_level.max().max(1) as f32;
 
     // Extract u16 buffer (converting f32 if needed) with zero-copy move for U16.
-    let pixels: Vec<u16> = match frame.data {
-        flashraw::RawPixelData::U16(v) => v,
+    let (pixels, black_levels, white_levels): (Vec<u16>, [f32; 4], [f32; 4]) = match frame.data {
+        flashraw::RawPixelData::U16(v) => (v, black_levels, white_levels),
         flashraw::RawPixelData::F32(vf) => {
             warnings.push(
                 "Floating-point RAW container scaled to 16-bit integer domain for analysis."
                     .to_string(),
             );
             let scale = if max_wl <= 2.0 { 16383.0 / max_wl } else { 1.0 };
-            vf.into_iter()
-                .map(|x| (x * scale).clamp(0.0, 65535.0).round() as u16)
-                .collect()
+            let scaled: Vec<u16> = vf
+                .into_iter()
+                .map(|x| {
+                    if x.is_finite() {
+                        (x * scale).clamp(0.0, 65535.0).round() as u16
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            let (s_bl, s_wl) = if scale != 1.0 {
+                sanitize_levels(
+                    black_levels.map(|b| b * scale),
+                    white_levels.map(|w| w * scale),
+                )
+            } else {
+                (black_levels, white_levels)
+            };
+            (scaled, s_bl, s_wl)
         }
         _ => return Err(CollimaError::UnsupportedPixelData),
     };
+
+    if pixels.len() < expected_samples {
+        return Err(CollimaError::RawDecode(format!(
+            "Decoded pixel buffer shorter than expected ({} < {})",
+            pixels.len(),
+            expected_samples
+        )));
+    }
 
     let meta = RawImageMetadata {
         make,
@@ -673,7 +1004,7 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         warnings,
     };
 
-    Ok(DecodedRawImage {
+    let mut img = DecodedRawImage {
         meta,
         stride: raw_w,
         buffer_height: raw_h,
@@ -686,7 +1017,128 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         white_levels,
         wb_rgb,
         cam_wb_to_srgb,
-    })
+    };
+    apply_upright_orientation(&mut img);
+    Ok(img)
+}
+
+/// Losslessly permute active sensor samples into upright display orientation when EXIF
+/// `orientation_exif` is in `2..=8` (e.g. `6` = 90° CW portrait, `8` = 270° CW portrait,
+/// `3` = 180°), updating `active_rect`, `BayerQuadOffsets`, `G1`/`G2` calibration levels,
+/// and `generic_cfa` so overview, 5x5 heatmap, 9-grid stations, and tilt compass all align.
+fn apply_upright_orientation(img: &mut DecodedRawImage) {
+    let ori = img.meta.orientation_exif;
+    if !(2..=8).contains(&ori) {
+        return;
+    }
+
+    let [ax, ay, aw, ah] = img.active_rect;
+    let swaps = matches!(ori, 5..=8);
+    let (out_w, out_h) = if swaps { (ah, aw) } else { (aw, ah) };
+    let cpp = img.cpp;
+
+    let map_uv_to_src = |u: usize, v: usize| -> (usize, usize) {
+        match ori {
+            2 => (aw - 1 - u, v),
+            3 => (aw - 1 - u, ah - 1 - v),
+            4 => (u, ah - 1 - v),
+            5 => (v, u),
+            6 => (v, ah - 1 - u),
+            7 => (ah - 1 - v, aw - 1 - u),
+            8 => (aw - 1 - v, u),
+            _ => (u, v),
+        }
+    };
+
+    let mut upright = vec![0u16; out_w * out_h * cpp];
+    if cpp == 1 {
+        for v in 0..out_h {
+            let dst_row = v * out_w;
+            for u in 0..out_w {
+                let (sx, sy) = map_uv_to_src(u, v);
+                upright[dst_row + u] = img.pixels[(ay + sy) * img.stride + (ax + sx)];
+            }
+        }
+    } else {
+        for v in 0..out_h {
+            for u in 0..out_w {
+                let (sx, sy) = map_uv_to_src(u, v);
+                let src = ((ay + sy) * img.stride + (ax + sx)) * cpp;
+                let dst = (v * out_w + u) * cpp;
+                upright[dst..dst + cpp].copy_from_slice(&img.pixels[src..src + cpp]);
+            }
+        }
+        // For 4-plane Pixel Shift (R, G1, B, G2), swapping rows/cols swaps G1 (c=1) and G2 (c=3).
+        if swaps && cpp >= 4 {
+            for px in upright.chunks_exact_mut(cpp) {
+                px.swap(1, 3);
+            }
+        }
+    }
+
+    if let Some(old_bo) = img.bayer_offsets {
+        let mut new_rx = 0usize;
+        let mut new_ry = 0usize;
+        for dv in 0..2usize {
+            for du in 0..2usize {
+                let (sx, sy) = map_uv_to_src(du, dv);
+                if (sx & 1, sy & 1) == old_bo.r {
+                    new_rx = du;
+                    new_ry = dv;
+                }
+            }
+        }
+        let new_bo = BayerQuadOffsets::from_red_offset(new_rx, new_ry);
+        img.meta.cfa_pattern = new_bo.pattern_string();
+        img.bayer_offsets = Some(new_bo);
+    }
+
+    if swaps && (img.bayer_offsets.is_some() || cpp >= 4) {
+        img.black_levels.swap(1, 2);
+        img.white_levels.swap(1, 2);
+        img.meta.black_levels = img.black_levels;
+        img.meta.white_levels = img.white_levels;
+    }
+
+    if let Some((cw, ch, old_table)) = &img.generic_cfa {
+        let (new_cw, new_ch) = if swaps { (*ch, *cw) } else { (*cw, *ch) };
+        let mut new_table = vec![1u8; new_cw * new_ch];
+        let aw_i = aw as isize;
+        let ah_i = ah as isize;
+        for dv in 0..new_ch {
+            for du in 0..new_cw {
+                let u = du as isize;
+                let v = dv as isize;
+                let (sx_i, sy_i) = match ori {
+                    2 => (aw_i - 1 - u, v),
+                    3 => (aw_i - 1 - u, ah_i - 1 - v),
+                    4 => (u, ah_i - 1 - v),
+                    5 => (v, u),
+                    6 => (v, ah_i - 1 - u),
+                    7 => (ah_i - 1 - v, aw_i - 1 - u),
+                    8 => (aw_i - 1 - v, u),
+                    _ => (u, v),
+                };
+                let px = (ax as isize + sx_i).rem_euclid(*cw as isize) as usize;
+                let py = (ay as isize + sy_i).rem_euclid(*ch as isize) as usize;
+                new_table[dv * new_cw + du] = old_table[py * *cw + px];
+            }
+        }
+        img.generic_cfa = Some((new_cw, new_ch, new_table));
+    }
+
+    img.pixels = upright;
+    img.stride = out_w;
+    img.buffer_height = out_h;
+    img.active_rect = [0, 0, out_w, out_h];
+    img.meta.active_x = 0;
+    img.meta.active_y = 0;
+    img.meta.active_width = out_w as u32;
+    img.meta.active_height = out_h as u32;
+    img.meta.warnings.push(format!(
+        "Applied lossless EXIF orientation {} transform to align sensor geometry ({}x{}).",
+        ori, out_w, out_h
+    ));
 }
 
 const IDENTITY_3X3: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -714,8 +1166,8 @@ pub fn compute_cam_wb_to_srgb_matrix(xyz_to_cam: &[[f64; 3]; 3]) -> [[f32; 3]; 3
         if row_sum.abs() < 1e-8 {
             return IDENTITY_3X3;
         }
-        for j in 0..3 {
-            srgb_to_cam[i][j] /= row_sum;
+        for val in &mut srgb_to_cam[i] {
+            *val /= row_sum;
         }
     }
 

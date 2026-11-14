@@ -12,6 +12,7 @@ import type { SyntheticPresetId } from '../types/collima';
 
 const SUPPORTED_EXTENSIONS = [
   '.arw',
+  '.arq',
   '.srf',
   '.sr2',
   '.nef',
@@ -27,6 +28,8 @@ const SUPPORTED_EXTENSIONS = [
   '.ori',
   '.pef',
   '.iiq',
+  '.cap',
+  '.eip',
   '.3fr',
   '.fff',
   '.erf',
@@ -35,6 +38,7 @@ const SUPPORTED_EXTENSIONS = [
   '.mos',
   '.mrw',
   '.srw',
+  '.bay',
   '.x3f',
 ];
 
@@ -175,7 +179,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-            <span className="status-tag">Sony .ARW (含 A7M5/A7R6 X-OCN 已压缩 HQ · ARW 6.0)</span>
+            <span className="status-tag">Sony .ARW / .ARQ (含 A7M5/A7R6 X-OCN 已压缩 HQ · Pixel Shift)</span>
             <span className="status-tag">Nikon .NEF (含 Z9/Z8/Z6III/ZR HE &amp; HE* TicoRAW)</span>
             <span className="status-tag">Canon .CR3 / .CR2</span>
             <span className="status-tag">Adobe .DNG (含 JXL)</span>

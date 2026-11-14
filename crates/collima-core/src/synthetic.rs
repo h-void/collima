@@ -244,7 +244,7 @@ impl IfdWriter {
     }
 
     fn emit(mut self, out: &mut Vec<u8>) -> u32 {
-        while out.len() % 4 != 0 {
+        while !out.len().is_multiple_of(4) {
             out.push(0);
         }
         self.entries.sort_by_key(|e| e.tag);
@@ -265,7 +265,7 @@ impl IfdWriter {
                 inline[..e.payload.len()].copy_from_slice(&e.payload);
                 out.extend_from_slice(&inline);
             } else {
-                while (heap_offset as usize + heap.len()) % 4 != 0 {
+                while !(heap_offset as usize + heap.len()).is_multiple_of(4) {
                     heap.push(0);
                 }
                 let ptr = heap_offset + heap.len() as u32;
@@ -283,9 +283,13 @@ impl IfdWriter {
 /// focal-plane tilt (`tilt_strength = 0.0` for flat reference, `0.0..=1.0` for Top-Left mount tilt)
 /// and realistic cos^4 optical vignetting.
 pub fn generate_tilted_chart_dng(width: u32, height: u32, tilt_strength: f32) -> Vec<u8> {
-    let w = (width.max(128) & !1) as usize;
-    let h = (height.max(128) & !1) as usize;
-    let tilt = tilt_strength.clamp(0.0, 1.5) as f64;
+    let w = (width.clamp(128, 4096) & !1) as usize;
+    let h = (height.clamp(128, 4096) & !1) as usize;
+    let tilt = if tilt_strength.is_finite() {
+        tilt_strength.clamp(0.0, 1.5) as f64
+    } else {
+        0.0
+    };
 
     // Synthesize high-contrast linear luminance chart on [0.08, 0.78] before PSF & vignetting.
     let mut lum = vec![0.0f32; w * h];
@@ -399,8 +403,8 @@ pub fn generate_tilted_chart_dng(width: u32, height: u32, tilt_strength: f32) ->
 
 /// Generate a synthetic 14-bit astrophotography starfield `.DNG` with Top-Right optical tilt.
 pub fn generate_starfield_tilt_dng(width: u32, height: u32) -> Vec<u8> {
-    let w = (width.max(256) & !1) as usize;
-    let h = (height.max(256) & !1) as usize;
+    let w = (width.clamp(256, 4096) & !1) as usize;
+    let h = (height.clamp(256, 4096) & !1) as usize;
     let mut rng = Rng64::new(0xA572_0F1E_1D99);
 
     let mut sky = vec![0.008f32; w * h];
@@ -492,8 +496,8 @@ pub fn generate_starfield_tilt_dng(width: u32, height: u32) -> Vec<u8> {
 /// Generate a realistic 14-bit Dual-Native-ISO dark frame `.DNG` (HCG gain switch at ISO 800)
 /// with slight channel black-level offset and injected hot pixels.
 pub fn generate_dark_frame_dng(width: u32, height: u32, iso: u32) -> Vec<u8> {
-    let w = (width.max(128) & !1) as usize;
-    let h = (height.max(128) & !1) as usize;
+    let w = (width.clamp(128, 4096) & !1) as usize;
+    let h = (height.clamp(128, 4096) & !1) as usize;
     let iso_clamped = iso.clamp(50, 102_400);
     let mut rng = Rng64::new(0xDA2C_0000 ^ (iso_clamped as u64 * 7919));
 

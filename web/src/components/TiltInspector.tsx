@@ -62,7 +62,8 @@ const VALIDITY_LABEL: Record<CellValidity, string> = {
 
 /** Map normalized relative sharpness [0..1.15] to calibrated thermal RGBA (obsidian -> teal -> optical green -> amber -> ivory). */
 function heatmapColor(rel: number): [number, number, number] {
-  const t = Math.max(0, Math.min(1, rel));
+  const safeRel = Number.isFinite(rel) ? rel : 0;
+  const t = Math.max(0, Math.min(1, safeRel));
   if (t < 0.35) {
     const k = t / 0.35;
     return [
@@ -101,6 +102,16 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
   const [panPx, setPanPx] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [evDraft, setEvDraft] = useState<number | null>(null);
   const displayEv = evDraft ?? session.evBoost;
+
+  const commitEvDraft = useCallback(() => {
+    if (evDraft !== null) {
+      const nextEv = evDraft;
+      setEvDraft(null);
+      if (Math.abs(nextEv - session.evBoost) > 1e-6) {
+        onUpdateRenderParams(nextEv, session.patchMode);
+      }
+    }
+  }, [evDraft, onUpdateRenderParams, session.evBoost, session.patchMode]);
 
   const overviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const loupeCanvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
@@ -201,90 +212,124 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     );
     ctx.putImageData(baseImg, 0, 0);
 
-    // 2. Smooth 5x5 interpolated contour heatmap overlay
-    if (showHeatmap && session.sharpness.grid5x5.length === 25) {
-      const hmW = 120;
-      const hmH = Math.max(60, Math.round((oh / ow) * hmW));
-      const hmCanvas = document.createElement('canvas');
-      hmCanvas.width = hmW;
-      hmCanvas.height = hmH;
-      const hmCtx = hmCanvas.getContext('2d');
+    const centerValid =
+      session.sharpness.grid3x3[4]?.validity === 'valid' &&
+      Number.isFinite(session.sharpness.centerSharpness) &&
+      session.sharpness.centerSharpness > 1e-6;
 
-      if (hmCtx) {
-        const hmData = hmCtx.createImageData(hmW, hmH);
-        const vals = new Float32Array(25);
-        for (let i = 0; i < 25; i++) {
-          vals[i] = session.sharpness.grid5x5[i].relativeToCenter;
+    // 2. Smooth 5x5 interpolated contour heatmap overlay (ignoring low-texture sky / clipped regions)
+    if (showHeatmap && centerValid && session.sharpness.grid5x5.length === 25) {
+      const validNodes: { r: number; c: number; val: number }[] = [];
+      for (let i = 0; i < 25; i++) {
+        const g = session.sharpness.grid5x5[i];
+        if (g.validity === 'valid' && Number.isFinite(g.relativeToCenter)) {
+          validNodes.push({
+            r: Math.floor(i / 5),
+            c: i % 5,
+            val: g.relativeToCenter,
+          });
         }
+      }
 
-        const sampleGrid = (u: number, v: number): number => {
-          // Grid centers lie at (c + 0.5) / 5
-          const gx = Math.max(0, Math.min(4, u * 5 - 0.5));
-          const gy = Math.max(0, Math.min(4, v * 5 - 0.5));
-          const x0 = Math.floor(gx);
-          const y0 = Math.floor(gy);
-          const x1 = Math.min(4, x0 + 1);
-          const y1 = Math.min(4, y0 + 1);
-          const fx = gx - x0;
-          const fy = gy - y0;
-          const v00 = vals[y0 * 5 + x0];
-          const v10 = vals[y0 * 5 + x1];
-          const v01 = vals[y1 * 5 + x0];
-          const v11 = vals[y1 * 5 + x1];
-          const top = v00 + (v10 - v00) * fx;
-          const bot = v01 + (v11 - v01) * fx;
-          return top + (bot - top) * fy;
-        };
+      if (validNodes.length >= 3) {
+        const hmW = 120;
+        const hmH = Math.max(60, Math.round((oh / ow) * hmW));
+        const hmCanvas = document.createElement('canvas');
+        hmCanvas.width = hmW;
+        hmCanvas.height = hmH;
+        const hmCtx = hmCanvas.getContext('2d');
 
-        const field = new Float32Array(hmW * hmH);
-        for (let y = 0; y < hmH; y++) {
-          const v = (y + 0.5) / hmH;
-          for (let x = 0; x < hmW; x++) {
-            const u = (x + 0.5) / hmW;
-            field[y * hmW + x] = sampleGrid(u, v);
+        if (hmCtx) {
+          const hmData = hmCtx.createImageData(hmW, hmH);
+          const vals = new Float32Array(25);
+          for (let i = 0; i < 25; i++) {
+            const g = session.sharpness.grid5x5[i];
+            if (g.validity === 'valid' && Number.isFinite(g.relativeToCenter)) {
+              vals[i] = g.relativeToCenter;
+            } else {
+              const r = Math.floor(i / 5);
+              const c = i % 5;
+              let wSum = 0;
+              let vSum = 0;
+              for (const vn of validNodes) {
+                const d2 = (vn.r - r) * (vn.r - r) + (vn.c - c) * (vn.c - c);
+                const w = 1 / (d2 + 0.25);
+                wSum += w;
+                vSum += w * vn.val;
+              }
+              vals[i] = wSum > 0 ? vSum / wSum : 0;
+            }
           }
-        }
 
-        const bands = [0.3, 0.45, 0.6, 0.75, 0.9];
-        for (let y = 0; y < hmH; y++) {
-          for (let x = 0; x < hmW; x++) {
-            const idx = y * hmW + x;
-            const val = field[idx];
-            // Quantize slightly for crisp optical iso-contour legibility + contour edge highlight
-            const right = field[y * hmW + Math.min(hmW - 1, x + 1)];
-            const down = field[Math.min(hmH - 1, y + 1) * hmW + x];
-            let isContourLine = false;
-            for (const b of bands) {
-              if (
-                (val < b && (right >= b || down >= b)) ||
-                (val >= b && (right < b || down < b))
-              ) {
-                isContourLine = true;
-                break;
+          const sampleGrid = (u: number, v: number): number => {
+            // Grid centers lie at (c + 0.5) / 5
+            const gx = Math.max(0, Math.min(4, u * 5 - 0.5));
+            const gy = Math.max(0, Math.min(4, v * 5 - 0.5));
+            const x0 = Math.floor(gx);
+            const y0 = Math.floor(gy);
+            const x1 = Math.min(4, x0 + 1);
+            const y1 = Math.min(4, y0 + 1);
+            const fx = gx - x0;
+            const fy = gy - y0;
+            const v00 = vals[y0 * 5 + x0];
+            const v10 = vals[y0 * 5 + x1];
+            const v01 = vals[y1 * 5 + x0];
+            const v11 = vals[y1 * 5 + x1];
+            const top = v00 + (v10 - v00) * fx;
+            const bot = v01 + (v11 - v01) * fx;
+            return top + (bot - top) * fy;
+          };
+
+          const field = new Float32Array(hmW * hmH);
+          for (let y = 0; y < hmH; y++) {
+            const v = (y + 0.5) / hmH;
+            for (let x = 0; x < hmW; x++) {
+              const u = (x + 0.5) / hmW;
+              field[y * hmW + x] = sampleGrid(u, v);
+            }
+          }
+
+          const bands = [0.3, 0.45, 0.6, 0.75, 0.9];
+          for (let y = 0; y < hmH; y++) {
+            for (let x = 0; x < hmW; x++) {
+              const idx = y * hmW + x;
+              const val = field[idx];
+              // Quantize slightly for crisp optical iso-contour legibility + contour edge highlight
+              const right = field[y * hmW + Math.min(hmW - 1, x + 1)];
+              const down = field[Math.min(hmH - 1, y + 1) * hmW + x];
+              let isContourLine = false;
+              for (const b of bands) {
+                if (
+                  (val < b && (right >= b || down >= b)) ||
+                  (val >= b && (right < b || down < b))
+                ) {
+                  isContourLine = true;
+                  break;
+                }
+              }
+
+              const p = idx * 4;
+              if (isContourLine) {
+                hmData.data[p] = 248;
+                hmData.data[p + 1] = 250;
+                hmData.data[p + 2] = 252;
+                hmData.data[p + 3] = 195;
+              } else {
+                const [r, g, b] = heatmapColor(val);
+                hmData.data[p] = r;
+                hmData.data[p + 1] = g;
+                hmData.data[p + 2] = b;
+                hmData.data[p + 3] = 112;
               }
             }
-
-            const p = idx * 4;
-            if (isContourLine) {
-              hmData.data[p] = 248;
-              hmData.data[p + 1] = 250;
-              hmData.data[p + 2] = 252;
-              hmData.data[p + 3] = 195;
-            } else {
-              const [r, g, b] = heatmapColor(val);
-              hmData.data[p] = r;
-              hmData.data[p + 1] = g;
-              hmData.data[p + 2] = b;
-              hmData.data[p + 3] = 112;
-            }
           }
-        }
 
-        hmCtx.putImageData(hmData, 0, 0);
-        ctx.save();
-        ctx.imageSmoothingEnabled = true;
-        ctx.drawImage(hmCanvas, 0, 0, ow, oh);
-        ctx.restore();
+          hmCtx.putImageData(hmData, 0, 0);
+          ctx.save();
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(hmCanvas, 0, 0, ow, oh);
+          ctx.restore();
+        }
       }
     }
 
@@ -299,22 +344,32 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
       const boxH = Math.max(18, (rh / ah) * oh);
       const bx = cell.normX * ow - boxW * 0.5;
       const by = cell.normY * oh - boxH * 0.5;
+      const safeRel = Number.isFinite(cell.relativeToCenter)
+        ? cell.relativeToCenter
+        : 0;
+      const stationValid = cell.validity === 'valid' && (idx === 4 || centerValid);
 
       ctx.strokeStyle =
         idx === 4
-          ? 'hsl(37, 95%, 60%)'
-          : cell.relativeToCenter >= 0.72
-            ? 'hsl(152, 72%, 56%)'
-            : cell.relativeToCenter >= 0.48
-              ? 'hsl(37, 88%, 60%)'
-              : 'hsl(3, 86%, 66%)';
+          ? cell.validity === 'valid'
+            ? 'hsl(37, 95%, 60%)'
+            : 'hsl(3, 86%, 66%)'
+          : !stationValid
+            ? 'hsla(215, 16%, 68%, 0.78)'
+            : safeRel >= 0.72
+              ? 'hsl(152, 72%, 56%)'
+              : safeRel >= 0.48
+                ? 'hsl(37, 88%, 60%)'
+                : 'hsl(3, 86%, 66%)';
       ctx.lineWidth = Math.max(1.5, ow / 520);
       ctx.strokeRect(bx, by, boxW, boxH);
 
       // Station label tag
       const fontSize = Math.max(11, Math.round(ow / 78));
       ctx.font = `600 ${fontSize}px "JetBrains Mono", monospace`;
-      const label = `${cell.id} ${Math.round(cell.relativeToCenter * 100)}%`;
+      const label = stationValid
+        ? `${cell.id} ${Math.round(safeRel * 100)}%`
+        : `${cell.id} --`;
       const tw = ctx.measureText(label).width + 8;
       const th = fontSize + 6;
       ctx.fillStyle = 'hsla(220, 24%, 6%, 0.84)';
@@ -342,8 +397,9 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     cell: GridCellMetrics,
     e: React.PointerEvent<HTMLCanvasElement>,
   ) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
     const relocating = dragMode === 'relocate_roi' || e.shiftKey;
+    if (relocating && busy) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
     loupeDragRef.current = {
       stationIdx,
       startX: e.clientX,
@@ -366,10 +422,13 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     if (!st.relocating) {
       if (zoom === 1) return;
       const patch = session.patches[st.stationIdx];
-      const scale = patch.desc.width / Math.max(1, rect.width) / zoom;
+      const scaleX = patch.desc.width / Math.max(1, rect.width) / zoom;
+      const scaleY = patch.desc.height / Math.max(1, rect.height) / zoom;
+      const maxPanX = (patch.desc.width - patch.desc.width / zoom) * 0.5;
+      const maxPanY = (patch.desc.height - patch.desc.height / zoom) * 0.5;
       setPanPx({
-        x: st.origPanX + dxCss * scale,
-        y: st.origPanY + dyCss * scale,
+        x: Math.max(-maxPanX, Math.min(maxPanX, st.origPanX + dxCss * scaleX)),
+        y: Math.max(-maxPanY, Math.min(maxPanY, st.origPanY + dyCss * scaleY)),
       });
     }
   };
@@ -379,7 +438,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     if (!st) return;
     loupeDragRef.current = null;
 
-    if (st.relocating) {
+    if (st.relocating && !busy) {
       const rect = e.currentTarget.getBoundingClientRect();
       const dxCss = e.clientX - st.startX;
       const dyCss = e.clientY - st.startY;
@@ -393,14 +452,24 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
 
       const newNormX = Math.max(
         0.04,
-        Math.min(0.96, st.origNormX + sensorDx / session.metadata.activeWidth),
+        Math.min(
+          0.96,
+          st.origNormX + sensorDx / Math.max(1, session.metadata.activeWidth),
+        ),
       );
       const newNormY = Math.max(
         0.04,
-        Math.min(0.96, st.origNormY + sensorDy / session.metadata.activeHeight),
+        Math.min(
+          0.96,
+          st.origNormY + sensorDy / Math.max(1, session.metadata.activeHeight),
+        ),
       );
       onRelocateStation(st.stationIdx, newNormX, newNormY);
     }
+  };
+
+  const handleLoupePointerCancel = () => {
+    loupeDragRef.current = null;
   };
 
   // Dragging or clicking a station directly on the Overview Canvas
@@ -425,6 +494,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
   const handleOverviewPointerDown = (
     e: React.PointerEvent<HTMLCanvasElement>,
   ) => {
+    if (busy) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const nx = (e.clientX - rect.left) / Math.max(1, rect.width);
     const ny = (e.clientY - rect.top) / Math.max(1, rect.height);
@@ -439,6 +509,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     const idx = overviewDragStationRef.current;
     if (idx === null) return;
     overviewDragStationRef.current = null;
+    if (busy) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const nx = Math.max(
       0.04,
@@ -451,14 +522,26 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     onRelocateStation(idx, nx, ny);
   };
 
+  const handleOverviewPointerCancel = () => {
+    overviewDragStationRef.current = null;
+  };
+
   const { sharpness } = session;
   const gradeInfo = GRADE_META[sharpness.grade];
   const tv = sharpness.tiltVector;
+  const centerIsValid =
+    sharpness.grid3x3[4]?.validity === 'valid' &&
+    Number.isFinite(sharpness.centerSharpness) &&
+    sharpness.centerSharpness > 1e-6;
 
   // Polar compass vector endpoint (radius max = 44px mapped to tilt magnitude 0.30)
   const compassRadius = 44;
-  const normMag = Math.min(1, tv.magnitude / 0.3);
-  const collapseRad = (tv.collapseAngleDeg * Math.PI) / 180;
+  const safeMag = Number.isFinite(tv.magnitude) ? Math.max(0, tv.magnitude) : 0;
+  const safeCollapseDeg = Number.isFinite(tv.collapseAngleDeg)
+    ? tv.collapseAngleDeg
+    : 0;
+  const normMag = Math.min(1, safeMag / 0.3);
+  const collapseRad = (safeCollapseDeg * Math.PI) / 180;
   const arrowX = 60 + Math.cos(collapseRad) * normMag * compassRadius;
   const arrowY = 60 + Math.sin(collapseRad) * normMag * compassRadius;
 
@@ -605,18 +688,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               value={displayEv}
               disabled={busy}
               onChange={(e) => setEvDraft(parseFloat(e.target.value))}
-              onMouseUp={() => {
-                if (evDraft !== null) {
-                  onUpdateRenderParams(evDraft, session.patchMode);
-                  setEvDraft(null);
-                }
-              }}
-              onTouchEnd={() => {
-                if (evDraft !== null) {
-                  onUpdateRenderParams(evDraft, session.patchMode);
-                  setEvDraft(null);
-                }
-              }}
+              onPointerUp={commitEvDraft}
+              onPointerCancel={commitEvDraft}
+              onKeyUp={commitEvDraft}
+              onBlur={commitEvDraft}
               className="optical-slider w-24"
             />
             <span className="mono-num w-14 text-right text-[var(--text-primary)]">
@@ -629,10 +704,15 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         <div className="loupe-matrix">
           {sharpness.grid3x3.map((cell, idx) => {
             const isCenter = idx === 4;
-            const retPct = Math.round(cell.relativeToCenter * 100);
+            const safeRel = Number.isFinite(cell.relativeToCenter)
+              ? cell.relativeToCenter
+              : 0;
+            const retPct = Math.round(safeRel * 100);
             const retTone = isCenter
-              ? 'text-[var(--accent-amber)]'
-              : cell.validity !== 'valid'
+              ? cell.validity === 'valid'
+                ? 'text-[var(--accent-amber)]'
+                : 'text-[var(--alert-coral)]'
+              : cell.validity !== 'valid' || !centerIsValid
                 ? 'text-[var(--text-muted)]'
                 : retPct >= 75
                   ? 'text-[var(--optical-green)]'
@@ -653,6 +733,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   onPointerDown={(e) => handleLoupePointerDown(idx, cell, e)}
                   onPointerMove={handleLoupePointerMove}
                   onPointerUp={handleLoupePointerUp}
+                  onPointerCancel={handleLoupePointerCancel}
                   className={`loupe-canvas ${
                     dragMode === 'relocate_roi'
                       ? 'cursor-move'
@@ -668,21 +749,27 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                     <span className="mono-num font-semibold px-1.5 py-0.5 rounded bg-[hsla(220,25%,8%,0.85)] text-[var(--text-primary)] border border-[var(--hairline-default)]">
                       {cell.id}
                     </span>
-                    {cell.medianStarHfrPx !== null && cell.starCount > 0 && (
-                      <span className="mono-num px-1.5 py-0.5 rounded bg-[hsla(201,80%,16%,0.82)] text-[var(--channel-b)]">
-                        HFR {cell.medianStarHfrPx.toFixed(2)}px
-                      </span>
-                    )}
+                    {cell.medianStarHfrPx !== null &&
+                      Number.isFinite(cell.medianStarHfrPx) &&
+                      cell.starCount > 0 && (
+                        <span className="mono-num px-1.5 py-0.5 rounded bg-[hsla(201,80%,16%,0.82)] text-[var(--channel-b)]">
+                          HFR {cell.medianStarHfrPx.toFixed(2)}px
+                        </span>
+                      )}
                   </div>
 
                   <span
                     className={`mono-num font-semibold px-1.5 py-0.5 rounded bg-[hsla(220,25%,8%,0.85)] ${retTone}`}
                   >
                     {isCenter
-                      ? '100% 中心基准'
+                      ? cell.validity === 'valid'
+                        ? '100% 中心基准'
+                        : `中心·${VALIDITY_LABEL[cell.validity]}`
                       : cell.validity !== 'valid'
                         ? VALIDITY_LABEL[cell.validity]
-                        : `保持率 ${retPct}%`}
+                        : !centerIsValid
+                          ? '基准无效'
+                          : `保持率 ${retPct}%`}
                   </span>
                 </div>
 
@@ -736,13 +823,16 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           </div>
 
           <div className="p-3 bg-[var(--bg-loupe)]">
-            <canvas
-              id="overview-heatmap-canvas"
-              ref={overviewCanvasRef}
-              onPointerDown={handleOverviewPointerDown}
-              onPointerUp={handleOverviewPointerUp}
-              className="w-full h-auto rounded-md border border-[var(--hairline-subtle)] cursor-crosshair block"
-            />
+            <div className="rounded-md border border-[var(--hairline-subtle)] overflow-hidden">
+              <canvas
+                id="overview-heatmap-canvas"
+                ref={overviewCanvasRef}
+                onPointerDown={handleOverviewPointerDown}
+                onPointerUp={handleOverviewPointerUp}
+                onPointerCancel={handleOverviewPointerCancel}
+                className="w-full h-auto cursor-crosshair block"
+              />
+            </div>
 
             {/* Heatmap Color Scale Legend */}
             <div className="mt-2.5 flex items-center justify-between text-[11px] text-[var(--text-muted)] mono-num">

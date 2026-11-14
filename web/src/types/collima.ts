@@ -261,6 +261,14 @@ export type WorkerRequest =
   | {
       type: 'GENERATE_SYNTHETIC_ISO_SERIES';
       requestId: number;
+    }
+  | {
+      type: 'CLOSE_SESSION';
+      requestId: number;
+    }
+  | {
+      type: 'CANCEL_NOISE_BATCH';
+      requestId: number;
     };
 
 export type WorkerResponse =

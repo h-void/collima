@@ -120,7 +120,10 @@ fn srgb_lut() -> &'static [u8; SRGB_LUT_SIZE + 1] {
 
 #[inline]
 fn linear_to_srgb_u8(v: f32, lut: &[u8; SRGB_LUT_SIZE + 1]) -> u8 {
-    let clamped = v.clamp(0.0, 1.0);
+    if !v.is_finite() || v <= 0.0 {
+        return 0;
+    }
+    let clamped = v.min(1.0);
     let idx = (clamped * SRGB_LUT_SIZE as f32 + 0.5) as usize;
     lut[idx.min(SRGB_LUT_SIZE)]
 }
@@ -128,6 +131,35 @@ fn linear_to_srgb_u8(v: f32, lut: &[u8; SRGB_LUT_SIZE + 1]) -> u8 {
 #[inline]
 fn normalize_sample(raw: f32, black: f32, inv_span: f32) -> f32 {
     ((raw - black) * inv_span).max(0.0)
+}
+
+#[inline]
+fn channel_inv_spans(img: &DecodedRawImage) -> [f32; 4] {
+    std::array::from_fn(|i| {
+        let span = img.white_levels[i] - img.black_levels[i];
+        if span.is_finite() && span > 1e-3 {
+            1.0 / span
+        } else {
+            0.0
+        }
+    })
+}
+
+/// Reflect out-of-bounds stencil coordinates while preserving `(x & 1)` Bayer parity at sensor edges.
+#[inline]
+fn mirror_bayer_coord(coord: isize, len: usize) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+    let max_i = (len - 1) as isize;
+    let reflected = if coord < 0 {
+        -coord
+    } else if coord > max_i {
+        2 * max_i - coord
+    } else {
+        coord
+    };
+    reflected.clamp(0, max_i) as usize
 }
 
 #[inline]
@@ -162,20 +194,20 @@ pub fn render_overview_rgba(img: &DecodedRawImage, max_dim: u32, ev_boost: f32) 
     let [ax, ay, aw, ah] = img.active_rect;
     let half_w = (aw / 2).max(1);
     let half_h = (ah / 2).max(1);
-    let max_d = max_dim.max(256) as usize;
+    let max_d = max_dim.clamp(256, 4096) as usize;
 
-    let quad_step = ((half_w.max(half_h) + max_d - 1) / max_d).max(1);
+    let quad_step = half_w.max(half_h).div_ceil(max_d).max(1);
     let out_w = (half_w / quad_step).max(1);
     let out_h = (half_h / quad_step).max(1);
 
     let lut = srgb_lut();
-    let gain = 2.0f32.powf(ev_boost.clamp(-6.0, 10.0));
-    let inv_spans = [
-        1.0 / (img.white_levels[0] - img.black_levels[0]).max(1.0),
-        1.0 / (img.white_levels[1] - img.black_levels[1]).max(1.0),
-        1.0 / (img.white_levels[2] - img.black_levels[2]).max(1.0),
-        1.0 / (img.white_levels[3] - img.black_levels[3]).max(1.0),
-    ];
+    let safe_ev = if ev_boost.is_finite() {
+        ev_boost.clamp(-6.0, 10.0)
+    } else {
+        0.0
+    };
+    let gain = 2.0f32.powf(safe_ev);
+    let inv_spans = channel_inv_spans(img);
 
     let mut rgba = vec![0u8; out_w * out_h * 4];
 
@@ -225,11 +257,21 @@ pub fn render_overview_rgba(img: &DecodedRawImage, max_dim: u32, ev_boost: f32) 
                     let base = (sy * img.stride + sx) * img.cpp;
                     let r_lin =
                         normalize_sample(img.pixels[base] as f32, img.black_levels[0], inv_spans[0]);
-                    let g_lin = normalize_sample(
+                    let g1_lin = normalize_sample(
                         img.pixels[base + 1] as f32,
                         img.black_levels[1],
                         inv_spans[1],
                     );
+                    let g_lin = if img.cpp >= 4 {
+                        let g2_lin = normalize_sample(
+                            img.pixels[base + 3] as f32,
+                            img.black_levels[2],
+                            inv_spans[2],
+                        );
+                        0.5 * (g1_lin + g2_lin)
+                    } else {
+                        g1_lin
+                    };
                     let b_lin = normalize_sample(
                         img.pixels[base + 2] as f32,
                         img.black_levels[3],
@@ -317,27 +359,40 @@ pub fn render_patch_rgba(
     ev_boost: f32,
 ) -> RenderedRgba {
     let [_, _, aw, ah] = img.active_rect;
-    let pw = (patch_w.clamp(32, 1024) as usize).min(aw);
-    let ph = (patch_h.clamp(32, 1024) as usize).min(ah);
+    let even_aw = if aw >= 2 { aw & !1 } else { aw };
+    let even_ah = if ah >= 2 { ah & !1 } else { ah };
+    let pw = ((patch_w.clamp(32, 1024) as usize) & !1).min(even_aw).max(1);
+    let ph = ((patch_h.clamp(32, 1024) as usize) & !1).min(even_ah).max(1);
 
-    let cx = (norm_x.clamp(0.0, 1.0) * aw as f32).round() as isize;
-    let cy = (norm_y.clamp(0.0, 1.0) * ah as f32).round() as isize;
+    let nx_clamped = if norm_x.is_finite() {
+        norm_x.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let ny_clamped = if norm_y.is_finite() {
+        norm_y.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+
+    let cx = (nx_clamped * aw as f32).round() as isize;
+    let cy = (ny_clamped * ah as f32).round() as isize;
 
     let x0 = (cx - (pw as isize / 2)).clamp(0, (aw - pw) as isize) as usize;
     let y0 = (cy - (ph as isize / 2)).clamp(0, (ah - ph) as isize) as usize;
 
     let lut = srgb_lut();
-    let gain = 2.0f32.powf(ev_boost.clamp(-6.0, 10.0));
-    let inv_spans = [
-        1.0 / (img.white_levels[0] - img.black_levels[0]).max(1.0),
-        1.0 / (img.white_levels[1] - img.black_levels[1]).max(1.0),
-        1.0 / (img.white_levels[2] - img.black_levels[2]).max(1.0),
-        1.0 / (img.white_levels[3] - img.black_levels[3]).max(1.0),
-    ];
+    let safe_ev = if ev_boost.is_finite() {
+        ev_boost.clamp(-6.0, 10.0)
+    } else {
+        0.0
+    };
+    let gain = 2.0f32.powf(safe_ev);
+    let inv_spans = channel_inv_spans(img);
 
     let sample_norm = |x: isize, y: isize| -> f32 {
-        let sx = x.clamp(0, (aw - 1) as isize) as usize;
-        let sy = y.clamp(0, (ah - 1) as isize) as usize;
+        let sx = mirror_bayer_coord(x, aw);
+        let sy = mirror_bayer_coord(y, ah);
         let ch = img.channel_at_active(sx, sy);
         let raw = img.active_sample(sx, sy, 0) as f32;
         normalize_sample(raw, img.black_levels[ch], inv_spans[ch])
@@ -355,11 +410,21 @@ pub fn render_patch_rgba(
                     img.black_levels[0],
                     inv_spans[0],
                 );
-                let g = normalize_sample(
+                let g1 = normalize_sample(
                     img.active_sample(sx, sy, 1) as f32,
                     img.black_levels[1],
                     inv_spans[1],
                 );
+                let g = if img.cpp >= 4 {
+                    let g2 = normalize_sample(
+                        img.active_sample(sx, sy, 3) as f32,
+                        img.black_levels[2],
+                        inv_spans[2],
+                    );
+                    0.5 * (g1 + g2)
+                } else {
+                    g1
+                };
                 let b = normalize_sample(
                     img.active_sample(sx, sy, 2) as f32,
                     img.black_levels[3],
@@ -426,8 +491,8 @@ pub fn render_patch_rgba(
                             let mut cnt = [0u32; 3];
                             for dy in -1..=1 {
                                 for dx in -1..=1 {
-                                    let nx = (sx + dx).clamp(0, (aw - 1) as isize) as usize;
-                                    let ny = (sy + dy).clamp(0, (ah - 1) as isize) as usize;
+                                    let nx = mirror_bayer_coord(sx + dx, aw);
+                                    let ny = mirror_bayer_coord(sy + dy, ah);
                                     let nch = img.channel_at_active(nx, ny);
                                     let nv = sample_norm(sx + dx, sy + dy);
                                     let idx = match nch {

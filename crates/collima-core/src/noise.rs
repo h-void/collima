@@ -90,7 +90,9 @@ pub struct IsoNoiseSeriesReport {
 /// canonical `R, G1, G2, B` channels.
 pub fn analyze_noise(img: &DecodedRawImage, filename: &str) -> DarkFrameReport {
     let [ax, ay, aw, ah] = img.active_rect;
-    let iso = img.meta.iso.unwrap_or(100).max(1);
+    let valid_iso = img.meta.iso.filter(|&v| v > 0);
+    let has_exif_iso = valid_iso.is_some();
+    let iso = valid_iso.unwrap_or(0);
 
     // Heap-allocate four 65,536-bin histograms (4 x 256 KB = 1 MB) to avoid WASM stack pressure.
     let mut hists: [Vec<u32>; 4] = [
@@ -119,42 +121,60 @@ pub fn analyze_noise(img: &DecodedRawImage, filename: &str) -> DarkFrameReport {
                     let g2v = img.pixels[g2_row + sx + bo.g2.0] as usize;
                     let bv = img.pixels[b_row + sx + bo.b.0] as usize;
 
-                    hists[0][rv] += 1;
-                    hists[1][g1v] += 1;
-                    hists[2][g2v] += 1;
-                    hists[3][bv] += 1;
+                    hists[0][rv] = hists[0][rv].saturating_add(1);
+                    hists[1][g1v] = hists[1][g1v].saturating_add(1);
+                    hists[2][g2v] = hists[2][g2v].saturating_add(1);
+                    hists[3][bv] = hists[3][bv].saturating_add(1);
                 }
             }
-            let n = (qw * qh) as u64;
+            let n = (qw as u64) * (qh as u64);
             counts = [n, n, n, n];
         }
         MosaicKind::LinearRgb => {
-            for y in 0..ah {
-                for x in 0..aw {
-                    let rv = img.active_sample(x, y, 0) as usize;
-                    let gv = img.active_sample(x, y, 1) as usize;
-                    let bv = img.active_sample(x, y, 2) as usize;
-                    hists[0][rv] += 1;
-                    if ((x + y) & 1) == 0 {
-                        hists[1][gv] += 1;
-                        counts[1] += 1;
-                    } else {
-                        hists[2][gv] += 1;
-                        counts[2] += 1;
+            if img.cpp >= 4 {
+                // 4-plane full-color RAW (e.g. Sony Pixel Shift `.ARQ`): `[0=R, 1=G1, 2=B, 3=G2]`.
+                for y in 0..ah {
+                    for x in 0..aw {
+                        let rv = img.active_sample(x, y, 0) as usize;
+                        let g1v = img.active_sample(x, y, 1) as usize;
+                        let bv = img.active_sample(x, y, 2) as usize;
+                        let g2v = img.active_sample(x, y, 3) as usize;
+                        hists[0][rv] = hists[0][rv].saturating_add(1);
+                        hists[1][g1v] = hists[1][g1v].saturating_add(1);
+                        hists[2][g2v] = hists[2][g2v].saturating_add(1);
+                        hists[3][bv] = hists[3][bv].saturating_add(1);
                     }
-                    hists[3][bv] += 1;
                 }
+                let n = (aw as u64) * (ah as u64);
+                counts = [n, n, n, n];
+            } else {
+                for y in 0..ah {
+                    for x in 0..aw {
+                        let rv = img.active_sample(x, y, 0) as usize;
+                        let gv = img.active_sample(x, y, 1) as usize;
+                        let bv = img.active_sample(x, y, 2) as usize;
+                        hists[0][rv] = hists[0][rv].saturating_add(1);
+                        if ((x + y) & 1) == 0 {
+                            hists[1][gv] = hists[1][gv].saturating_add(1);
+                            counts[1] += 1;
+                        } else {
+                            hists[2][gv] = hists[2][gv].saturating_add(1);
+                            counts[2] += 1;
+                        }
+                        hists[3][bv] = hists[3][bv].saturating_add(1);
+                    }
+                }
+                let n = (aw as u64) * (ah as u64);
+                counts[0] = n;
+                counts[3] = n;
             }
-            let n = (aw * ah) as u64;
-            counts[0] = n;
-            counts[3] = n;
         }
         MosaicKind::XTrans6x6 | MosaicKind::OtherSinglePlane => {
             for y in 0..ah {
                 for x in 0..aw {
                     let ch = img.channel_at_active(x, y);
                     let v = img.active_sample(x, y, 0) as usize;
-                    hists[ch][v] += 1;
+                    hists[ch][v] = hists[ch][v].saturating_add(1);
                     counts[ch] += 1;
                 }
             }
@@ -174,7 +194,6 @@ pub fn analyze_noise(img: &DecodedRawImage, filename: &str) -> DarkFrameReport {
         }
     }
 
-    let has_exif_iso = img.meta.iso.is_some();
     let channels: [ChannelNoiseStats; 4] = std::array::from_fn(|ch| {
         compute_channel_from_histogram(
             CHANNEL_NAMES[ch],
@@ -182,7 +201,7 @@ pub fn analyze_noise(img: &DecodedRawImage, filename: &str) -> DarkFrameReport {
             counts[ch],
             img.black_levels[ch] as f64,
             img.white_levels[ch] as f64,
-            if has_exif_iso { Some(iso) } else { None },
+            valid_iso,
         )
     });
 
@@ -200,11 +219,8 @@ pub fn analyze_noise(img: &DecodedRawImage, filename: &str) -> DarkFrameReport {
     let local_patch_sigma_g = estimate_local_patch_sigma(img);
 
     let mean_read_noise_adu = 0.25 * channels.iter().map(|c| c.read_noise_adu).sum::<f64>();
-    let mean_read_noise_iso100_norm = if has_exif_iso {
-        Some(mean_read_noise_adu * (100.0 / iso as f64))
-    } else {
-        None
-    };
+    let mean_read_noise_iso100_norm =
+        valid_iso.map(|v| mean_read_noise_adu * (100.0 / v as f64));
     let mean_engineering_dr_ev = 0.25 * channels.iter().map(|c| c.engineering_dr_ev).sum::<f64>();
     let mean_black_offset_adu = 0.25 * channels.iter().map(|c| c.black_level_offset).sum::<f64>();
     let total_hot_pixels: u64 = channels.iter().map(|c| c.hot_pixel_count).sum();
@@ -214,8 +230,9 @@ pub fn analyze_noise(img: &DecodedRawImage, filename: &str) -> DarkFrameReport {
     let is_zero_clipped = channels.iter().any(|c| c.zero_clipped_pct >= 0.5);
     let span_ref = (img.white_levels[1] - img.black_levels[1]).max(1.0) as f64;
     let high_signal = channels[1].black_level_offset.abs() > 0.025 * span_ref;
-    let spatial_nonuniform =
-        local_patch_sigma_g > 0.5 && channels[1].read_noise_adu > 2.2 * local_patch_sigma_g && channels[1].read_noise_adu > 6.0;
+    let spatial_nonuniform = local_patch_sigma_g > 0.5
+        && channels[1].read_noise_adu > 2.2 * local_patch_sigma_g
+        && channels[1].read_noise_adu > 6.0;
     let suspected_light_leak = high_signal || spatial_nonuniform;
 
     let mut quality_notes = Vec::new();
@@ -235,16 +252,19 @@ pub fn analyze_noise(img: &DecodedRawImage, filename: &str) -> DarkFrameReport {
             max_clip
         ));
     }
-    if let Some(exp) = img.meta.exposure_time_sec {
-        if exp >= 0.25 {
-            quality_notes.push(format!(
-                "Long exposure ({:.2}s): measurements include thermal dark current in addition to readout noise.",
-                exp
-            ));
-        }
+    if let Some(exp) = img.meta.exposure_time_sec
+        && exp >= 0.25
+    {
+        quality_notes.push(format!(
+            "Long exposure ({:.2}s): measurements include thermal dark current in addition to readout noise.",
+            exp
+        ));
     }
     if !has_exif_iso {
-        quality_notes.push("EXIF ISO missing; defaulted to ISO 100 for ordering.".to_string());
+        quality_notes.push(
+            "EXIF ISO missing or invalid; excluded from ISO-gain curve inflection fitting."
+                .to_string(),
+        );
     }
 
     DarkFrameReport {
@@ -274,6 +294,17 @@ fn compute_channel_from_histogram(
     white_level: f64,
     iso_opt: Option<u32>,
 ) -> ChannelNoiseStats {
+    let nominal_bl = if nominal_bl.is_finite() {
+        nominal_bl
+    } else {
+        0.0
+    };
+    let white_level = if white_level.is_finite() {
+        white_level
+    } else {
+        0.0
+    };
+
     if total == 0 {
         return ChannelNoiseStats {
             channel: name.to_string(),
@@ -282,7 +313,7 @@ fn compute_channel_from_histogram(
             nominal_black_level: nominal_bl,
             white_level,
             measured_mean: nominal_bl,
-            median_adu: nominal_bl.round() as u16,
+            median_adu: nominal_bl.round().clamp(0.0, 65535.0) as u16,
             iqr_adu: 0,
             black_level_offset: 0.0,
             read_noise_adu: 0.0,
@@ -323,7 +354,7 @@ fn compute_channel_from_histogram(
             found_min = true;
         }
         max_adu = v as u16;
-        cum += cnt as u64;
+        cum = cum.saturating_add(cnt as u64);
 
         if !found_q1 && cum > q1_rank {
             q1_adu = v as u16;
@@ -358,7 +389,7 @@ fn compute_channel_from_histogram(
     let mut lo_cut = 0usize;
     let mut hi_cut = 65535usize;
     let mut clean_mean = center;
-    let mut clean_sigma = sigma_est;
+    let mut clean_sigma = 0.0;
     let mut clean_n = total;
 
     for _ in 0..2 {
@@ -366,11 +397,11 @@ fn compute_channel_from_histogram(
         lo_cut = (center - radius).floor().max(0.0) as usize;
         hi_cut = (center + radius).ceil().min(65535.0) as usize;
         let (m, s, n) = moments_in_range(hist, lo_cut, hi_cut);
-        if n > 1 {
+        if n >= 1 {
             clean_mean = m;
-            clean_sigma = s;
+            clean_sigma = if n > 1 { s } else { 0.0 };
             clean_n = n;
-            sigma_est = s.max(1.0);
+            sigma_est = clean_sigma.max(1.0);
         }
     }
 
@@ -383,15 +414,18 @@ fn compute_channel_from_histogram(
     let hot_pixel_ppm = (hot_pixel_count as f64 / total as f64) * 1_000_000.0;
 
     let black_level_offset = clean_mean - nominal_bl;
-    let effective_span = (white_level - nominal_bl).max(1.0);
-    let engineering_dr_ev = if clean_sigma > 1e-6 {
-        (effective_span / clean_sigma).log2().max(0.0)
+    let raw_span = white_level - nominal_bl;
+    let engineering_dr_ev = if !raw_span.is_finite() || raw_span <= 0.0 {
+        0.0
+    } else if clean_sigma > 1e-6 {
+        (raw_span / clean_sigma).log2().max(0.0)
     } else {
         // Quantization noise floor `1 / sqrt(12) = 0.2887 ADU` upper bound if all pixels are constant.
-        (effective_span / 0.288_675).log2().max(0.0)
+        (raw_span / 0.288_675).log2().max(0.0)
     };
 
-    let read_noise_iso100_norm = iso_opt.map(|iso| clean_sigma * (100.0 / iso.max(1) as f64));
+    let read_noise_iso100_norm =
+        iso_opt.filter(|&iso| iso > 0).map(|iso| clean_sigma * (100.0 / iso as f64));
     let zero_clipped_pct = (hist[0] as f64 / total as f64) * 100.0;
 
     ChannelNoiseStats {
@@ -420,18 +454,18 @@ fn compute_channel_from_histogram(
 
 fn moments_in_range(hist: &[u32], lo: usize, hi: usize) -> (f64, f64, u64) {
     let mut n = 0u64;
-    let mut sum = 0.0f64;
+    let mut sum = 0u128;
     for (v, &cnt) in hist.iter().enumerate().take(hi + 1).skip(lo) {
         if cnt > 0 {
             let c = cnt as u64;
-            n += c;
-            sum += (v as f64) * (c as f64);
+            n = n.saturating_add(c);
+            sum += (v as u128) * (c as u128);
         }
     }
     if n == 0 {
         return (0.0, 0.0, 0);
     }
-    let mean = sum / n as f64;
+    let mean = (sum as f64) / (n as f64);
     if n == 1 {
         return (mean, 0.0, 1);
     }
@@ -442,14 +476,14 @@ fn moments_in_range(hist: &[u32], lo: usize, hi: usize) -> (f64, f64, u64) {
             m2 += (cnt as f64) * diff * diff;
         }
     }
-    let std_dev = (m2 / (n - 1) as f64).sqrt();
+    let std_dev = (m2 / (n - 1) as f64).max(0.0).sqrt();
     (mean, std_dev, n)
 }
 
-/// Sample 25 small 16x16 Green patches distributed across the sensor to measure local temporal
+/// Sample 25 small Green patches distributed across the sensor to measure local temporal
 /// read noise free from large-scale spatial illumination gradients.
 fn estimate_local_patch_sigma(img: &DecodedRawImage) -> f64 {
-    let [ax, ay, aw, ah] = img.active_rect;
+    let [_ax, _ay, aw, ah] = img.active_rect;
     if aw < 64 || ah < 64 {
         return 0.0;
     }
@@ -467,26 +501,43 @@ fn estimate_local_patch_sigma(img: &DecodedRawImage) -> f64 {
                 .min(ah - 32)
                 & !1;
 
-            let mut vals = Vec::with_capacity(256);
-            for r in 0..16 {
-                for c in 0..16 {
-                    let v = if img.meta.mosaic_kind == MosaicKind::LinearRgb {
-                        img.active_sample(x0 + c, y0 + r, 1) as f64
-                    } else {
-                        let sx = ax + x0 + c * 2 + g_offset.0;
-                        let sy = ay + y0 + r * 2 + g_offset.1;
-                        if sy < img.buffer_height && sx < img.stride {
-                            img.pixels[sy * img.stride + sx] as f64
-                        } else {
-                            continue;
+            let mut vals = Vec::with_capacity(320);
+            match img.meta.mosaic_kind {
+                MosaicKind::LinearRgb => {
+                    for r in 0..16 {
+                        for c in 0..16 {
+                            vals.push(img.active_sample(x0 + c, y0 + r, 1) as f64);
                         }
-                    };
-                    vals.push(v);
+                    }
+                }
+                MosaicKind::Bayer2x2 => {
+                    for r in 0..16 {
+                        for c in 0..16 {
+                            let px = x0 + c * 2 + g_offset.0;
+                            let py = y0 + r * 2 + g_offset.1;
+                            if px < aw && py < ah {
+                                vals.push(img.active_sample(px, py, 0) as f64);
+                            }
+                        }
+                    }
+                }
+                MosaicKind::XTrans6x6 | MosaicKind::OtherSinglePlane => {
+                    for r in 0..24 {
+                        for c in 0..24 {
+                            let px = x0 + c;
+                            let py = y0 + r;
+                            if px < aw && py < ah && matches!(img.channel_at_active(px, py), 1 | 2)
+                            {
+                                vals.push(img.active_sample(px, py, 0) as f64);
+                            }
+                        }
+                    }
                 }
             }
+
             if vals.len() >= 32 {
                 vals.sort_unstable_by(|a, b| a.total_cmp(b));
-                // Trim top/bottom 5% to ignore isolated hot pixels inside the 16x16 patch.
+                // Trim top/bottom 5% to ignore isolated hot pixels inside the patch.
                 let trim = vals.len() / 20;
                 let slice = &vals[trim..vals.len() - trim];
                 let mean = slice.iter().sum::<f64>() / slice.len() as f64;
@@ -495,7 +546,7 @@ fn estimate_local_patch_sigma(img: &DecodedRawImage) -> f64 {
                     .map(|&x| (x - mean) * (x - mean))
                     .sum::<f64>()
                     / (slice.len() - 1).max(1) as f64;
-                patch_sigmas.push(var.sqrt());
+                patch_sigmas.push(var.max(0.0).sqrt());
             }
         }
     }
@@ -508,12 +559,13 @@ fn estimate_local_patch_sigma(img: &DecodedRawImage) -> f64 {
     patch_sigmas[mid]
 }
 
-/// Sort a batch of dark-frame reports by ISO ascending and detect Dual Native ISO / High
-/// Conversion Gain (HCG) switch inflection points.
+/// Sort a batch of dark-frame reports by ISO ascending (placing missing-EXIF `iso == 0` frames at
+/// the end) and detect Dual Native ISO / High Conversion Gain (HCG) switch inflection points.
 pub fn analyze_iso_series(mut frames: Vec<DarkFrameReport>) -> IsoNoiseSeriesReport {
     frames.sort_by(|a, b| {
-        a.iso
-            .cmp(&b.iso)
+        (a.iso == 0)
+            .cmp(&(b.iso == 0))
+            .then_with(|| a.iso.cmp(&b.iso))
             .then_with(|| a.filename.cmp(&b.filename))
     });
 
@@ -522,7 +574,15 @@ pub fn analyze_iso_series(mut frames: Vec<DarkFrameReport>) -> IsoNoiseSeriesRep
         .map(|f| f.metadata.camera_label.clone())
         .unwrap_or_else(|| "Unknown Camera".to_string());
 
-    // Aggregate duplicate ISOs (if the user dropped multiple dark frames per ISO) for clean inflection detection.
+    // Aggregate duplicate ISOs with exact 1/N arithmetic averaging across valid (`iso > 0`) frames.
+    struct IsoAccum {
+        iso: u32,
+        count: u32,
+        sigma_adu_sum: f64,
+        norm_sigma_sum: f64,
+        dr_ev_sum: f64,
+    }
+
     #[derive(Clone)]
     struct IsoPoint {
         iso: u32,
@@ -531,24 +591,49 @@ pub fn analyze_iso_series(mut frames: Vec<DarkFrameReport>) -> IsoNoiseSeriesRep
         dr_ev: f64,
     }
 
-    let mut grouped: Vec<IsoPoint> = Vec::new();
+    let mut accums: Vec<IsoAccum> = Vec::new();
+    let mut missing_iso_count = 0usize;
+
     for f in &frames {
+        if f.iso == 0
+            || !f.mean_read_noise_adu.is_finite()
+            || !f.mean_engineering_dr_ev.is_finite()
+        {
+            missing_iso_count += 1;
+            continue;
+        }
         let norm = f
             .mean_read_noise_iso100_norm
-            .unwrap_or(f.mean_read_noise_adu * (100.0 / f.iso.max(1) as f64));
-        if let Some(last) = grouped.last_mut().filter(|g| g.iso == f.iso) {
-            last.sigma_adu = 0.5 * (last.sigma_adu + f.mean_read_noise_adu);
-            last.norm_sigma = 0.5 * (last.norm_sigma + norm);
-            last.dr_ev = 0.5 * (last.dr_ev + f.mean_engineering_dr_ev);
+            .filter(|v| v.is_finite())
+            .unwrap_or(f.mean_read_noise_adu * (100.0 / f.iso as f64));
+        if let Some(last) = accums.last_mut().filter(|g| g.iso == f.iso) {
+            last.count += 1;
+            last.sigma_adu_sum += f.mean_read_noise_adu;
+            last.norm_sigma_sum += norm;
+            last.dr_ev_sum += f.mean_engineering_dr_ev;
         } else {
-            grouped.push(IsoPoint {
+            accums.push(IsoAccum {
                 iso: f.iso,
-                sigma_adu: f.mean_read_noise_adu,
-                norm_sigma: norm,
-                dr_ev: f.mean_engineering_dr_ev,
+                count: 1,
+                sigma_adu_sum: f.mean_read_noise_adu,
+                norm_sigma_sum: norm,
+                dr_ev_sum: f.mean_engineering_dr_ev,
             });
         }
     }
+
+    let grouped: Vec<IsoPoint> = accums
+        .into_iter()
+        .map(|a| {
+            let inv_n = 1.0 / (a.count.max(1) as f64);
+            IsoPoint {
+                iso: a.iso,
+                sigma_adu: a.sigma_adu_sum * inv_n,
+                norm_sigma: a.norm_sigma_sum * inv_n,
+                dr_ev: a.dr_ev_sum * inv_n,
+            }
+        })
+        .collect();
 
     let mut inflections = Vec::new();
     let mut prev_drop_per_stop: Option<f64> = None;
@@ -556,21 +641,34 @@ pub fn analyze_iso_series(mut frames: Vec<DarkFrameReport>) -> IsoNoiseSeriesRep
     for pair in grouped.windows(2) {
         let prev = &pair[0];
         let curr = &pair[1];
-        if curr.iso <= prev.iso {
+        if prev.iso == 0 || curr.iso <= prev.iso {
             continue;
         }
         let iso_ratio = curr.iso as f64 / prev.iso as f64;
-        if iso_ratio > 8.1 || prev.norm_sigma <= 1e-6 {
+        // Require at least ~1/6 EV step (`iso_ratio >= 1.10`) and <= 3 EV jump (`8.1x`) with positive baseline noise.
+        if !(1.10..=8.1).contains(&iso_ratio) || prev.norm_sigma <= 1e-6 {
             prev_drop_per_stop = None;
             continue;
         }
 
-        let stops = iso_ratio.log2().max(0.1);
+        let stops = iso_ratio.log2();
+        if !stops.is_finite() || stops <= 0.1 {
+            prev_drop_per_stop = None;
+            continue;
+        }
         let actual_dr_change = curr.dr_ev - prev.dr_ev;
         let dr_rebound_ev = actual_dr_change + stops;
         let norm_drop_pct = ((prev.norm_sigma - curr.norm_sigma) / prev.norm_sigma) * 100.0;
         let curr_drop_per_stop = norm_drop_pct / stops;
         let raw_adu_dropped = curr.sigma_adu < prev.sigma_adu * 0.98;
+
+        if !dr_rebound_ev.is_finite()
+            || !norm_drop_pct.is_finite()
+            || !curr_drop_per_stop.is_finite()
+        {
+            prev_drop_per_stop = None;
+            continue;
+        }
 
         // On any single-capacitor PGA + downstream ADC sensor, sigma_ADU strictly increases with ISO,
         // DR strictly decreases, and per-stop normalized-noise improvement strictly decelerates.
@@ -600,6 +698,15 @@ pub fn analyze_iso_series(mut frames: Vec<DarkFrameReport>) -> IsoNoiseSeriesRep
         prev_drop_per_stop = Some(curr_drop_per_stop);
     }
 
+    let missing_suffix = if missing_iso_count > 0 && !grouped.is_empty() {
+        format!(
+            " ({} frame(s) missing EXIF ISO excluded from curve.)",
+            missing_iso_count
+        )
+    } else {
+        String::new()
+    };
+
     let summary = if frames.is_empty() {
         "No dark frames loaded.".to_string()
     } else if !inflections.is_empty() {
@@ -609,24 +716,44 @@ pub fn analyze_iso_series(mut frames: Vec<DarkFrameReport>) -> IsoNoiseSeriesRep
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "Analyzed {} dark frame(s) for {}: detected Dual/Multi-Gain Conversion switch at {}.",
+            "Analyzed {} dark frame(s) for {}: detected Dual/Multi-Gain Conversion switch at {}.{}",
             frames.len(),
             camera_model,
-            list
+            list,
+            missing_suffix
+        )
+    } else if grouped.is_empty() {
+        format!(
+            "Analyzed {} dark frame(s) for {} (EXIF ISO missing; per-frame ADU noise and DR remain valid).",
+            frames.len(),
+            camera_model
         )
     } else if grouped.len() >= 3 {
         format!(
-            "Analyzed {} dark frame(s) for {} across ISO {}–{}: single-slope analog gain behavior (no HCG jump in sampled range).",
+            "Analyzed {} dark frame(s) for {} across ISO {}–{}: single-slope analog gain behavior (no HCG jump in sampled range).{}",
             frames.len(),
             camera_model,
             grouped.first().unwrap().iso,
-            grouped.last().unwrap().iso
+            grouped.last().unwrap().iso,
+            missing_suffix
+        )
+    } else if grouped.len() == 1 && frames.len() > 1 {
+        let pt = &grouped[0];
+        format!(
+            "Analyzed {} dark frame(s) for {} at ISO {} (mean σ = {:.2} ADU, DR = {:.2} EV). Add distinct ISO stops to map conversion gain transitions.{}",
+            frames.len(),
+            camera_model,
+            pt.iso,
+            pt.sigma_adu,
+            pt.dr_ev,
+            missing_suffix
         )
     } else {
         format!(
-            "Analyzed {} dark frame(s) for {}. Add 4+ ISO stops (e.g. ISO 100–6400) to map conversion gain transitions.",
+            "Analyzed {} dark frame(s) for {}. Add 4+ ISO stops (e.g. ISO 100–6400) to map conversion gain transitions.{}",
             frames.len(),
-            camera_model
+            camera_model,
+            missing_suffix
         )
     };
 

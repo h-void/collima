@@ -33,6 +33,7 @@ export const App: React.FC = () => {
     null,
   );
   const [progress, setProgress] = useState<{
+    requestId: number;
     stage: string;
     completed: number;
     total: number;
@@ -41,6 +42,10 @@ export const App: React.FC = () => {
 
   const workerRef = useRef<Worker | null>(null);
   const reqIdRef = useRef<number>(1);
+  const activeTiltSessionReqRef = useRef<number>(0);
+  const activeTiltRenderReqRef = useRef<number>(0);
+  const activeTiltStationReqRef = useRef<number>(0);
+  const activeNoiseReqRef = useRef<number>(0);
 
   const sendWorkerRequest = useCallback((req: WorkerRequest) => {
     setErrorMsg(null);
@@ -54,11 +59,22 @@ export const App: React.FC = () => {
     );
     workerRef.current = worker;
 
+    const clearProgressIfMatch = (requestId: number) => {
+      setProgress((prev) =>
+        prev && prev.requestId <= requestId ? null : prev,
+      );
+    };
+
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       const msg = event.data;
       switch (msg.type) {
         case 'PROGRESS': {
+          const isActiveReq =
+            msg.requestId === activeTiltSessionReqRef.current ||
+            msg.requestId === activeNoiseReqRef.current;
+          if (!isActiveReq) return;
           setProgress({
+            requestId: msg.requestId,
             stage: msg.stage,
             completed: msg.completed,
             total: msg.total,
@@ -66,7 +82,10 @@ export const App: React.FC = () => {
           break;
         }
         case 'SESSION_READY': {
-          setProgress(null);
+          clearProgressIfMatch(msg.requestId);
+          if (msg.requestId !== activeTiltSessionReqRef.current) {
+            return;
+          }
           setTiltSession({
             filename: msg.filename,
             metadata: msg.metadata,
@@ -86,7 +105,13 @@ export const App: React.FC = () => {
           break;
         }
         case 'RENDER_UPDATED': {
-          setProgress(null);
+          clearProgressIfMatch(msg.requestId);
+          if (
+            msg.requestId < activeTiltSessionReqRef.current ||
+            msg.requestId < activeTiltRenderReqRef.current
+          ) {
+            return;
+          }
           setTiltSession((prev) => {
             if (!prev) return prev;
             return {
@@ -106,9 +131,21 @@ export const App: React.FC = () => {
           break;
         }
         case 'STATION_UPDATED': {
-          setProgress(null);
+          clearProgressIfMatch(msg.requestId);
+          if (
+            msg.requestId < activeTiltSessionReqRef.current ||
+            msg.requestId < activeTiltStationReqRef.current
+          ) {
+            return;
+          }
           setTiltSession((prev) => {
-            if (!prev) return prev;
+            if (
+              !prev ||
+              msg.stationIdx < 0 ||
+              msg.stationIdx >= prev.patches.length
+            ) {
+              return prev;
+            }
             const nextPatches = [...prev.patches];
             nextPatches[msg.stationIdx] = {
               desc: msg.patchDesc,
@@ -123,7 +160,13 @@ export const App: React.FC = () => {
           break;
         }
         case 'STATIONS_RESET': {
-          setProgress(null);
+          clearProgressIfMatch(msg.requestId);
+          if (
+            msg.requestId < activeTiltSessionReqRef.current ||
+            msg.requestId < activeTiltStationReqRef.current
+          ) {
+            return;
+          }
           setTiltSession((prev) => {
             if (!prev) return prev;
             return {
@@ -138,13 +181,23 @@ export const App: React.FC = () => {
           break;
         }
         case 'NOISE_SERIES_READY': {
-          setProgress(null);
+          clearProgressIfMatch(msg.requestId);
+          if (msg.requestId !== activeNoiseReqRef.current) {
+            return;
+          }
           setNoiseSeries(msg.series);
           break;
         }
         case 'ERROR': {
-          setProgress(null);
-          setErrorMsg(msg.message);
+          clearProgressIfMatch(msg.requestId);
+          const isCurrentError =
+            msg.requestId === activeTiltSessionReqRef.current ||
+            msg.requestId === activeTiltRenderReqRef.current ||
+            msg.requestId === activeTiltStationReqRef.current ||
+            msg.requestId === activeNoiseReqRef.current;
+          if (isCurrentError) {
+            setErrorMsg(msg.message);
+          }
           break;
         }
       }
@@ -164,6 +217,9 @@ export const App: React.FC = () => {
   const handleFilesAccepted = (files: File[]) => {
     const requestId = ++reqIdRef.current;
     if (mode === 'tilt') {
+      activeTiltSessionReqRef.current = requestId;
+      activeTiltRenderReqRef.current = requestId;
+      activeTiltStationReqRef.current = requestId;
       sendWorkerRequest({
         type: 'OPEN_RAW_FILE',
         requestId,
@@ -173,6 +229,7 @@ export const App: React.FC = () => {
         patchSize: PATCH_SIZE,
       });
     } else {
+      activeNoiseReqRef.current = requestId;
       sendWorkerRequest({
         type: 'ANALYZE_NOISE_BATCH',
         requestId,
@@ -184,6 +241,9 @@ export const App: React.FC = () => {
 
   const handleLoadTiltPreset = (preset: SyntheticPresetId) => {
     const requestId = ++reqIdRef.current;
+    activeTiltSessionReqRef.current = requestId;
+    activeTiltRenderReqRef.current = requestId;
+    activeTiltStationReqRef.current = requestId;
     sendWorkerRequest({
       type: 'OPEN_SYNTHETIC_PRESET',
       requestId,
@@ -194,10 +254,36 @@ export const App: React.FC = () => {
     });
   };
 
+  const handleCloseTiltSession = () => {
+    const requestId = ++reqIdRef.current;
+    activeTiltSessionReqRef.current = 0;
+    activeTiltRenderReqRef.current = requestId;
+    activeTiltStationReqRef.current = requestId;
+    setTiltSession(null);
+    sendWorkerRequest({
+      type: 'CLOSE_SESSION',
+      requestId,
+    });
+  };
+
   const handleLoadNoisePreset = () => {
     const requestId = ++reqIdRef.current;
+    activeNoiseReqRef.current = requestId;
     sendWorkerRequest({
       type: 'GENERATE_SYNTHETIC_ISO_SERIES',
+      requestId,
+    });
+  };
+
+  const handleClearNoiseSeries = () => {
+    const requestId = ++reqIdRef.current;
+    activeNoiseReqRef.current = 0;
+    setProgress((prev) =>
+      prev && prev.requestId < requestId ? null : prev,
+    );
+    setNoiseSeries(null);
+    sendWorkerRequest({
+      type: 'CANCEL_NOISE_BATCH',
       requestId,
     });
   };
@@ -206,7 +292,9 @@ export const App: React.FC = () => {
     evBoost: number,
     patchMode: PatchRenderModeCode,
   ) => {
+    if (!tiltSession) return;
     const requestId = ++reqIdRef.current;
+    activeTiltRenderReqRef.current = requestId;
     sendWorkerRequest({
       type: 'UPDATE_RENDER_PARAMS',
       requestId,
@@ -223,6 +311,7 @@ export const App: React.FC = () => {
   ) => {
     if (!tiltSession) return;
     const requestId = ++reqIdRef.current;
+    activeTiltStationReqRef.current = requestId;
     sendWorkerRequest({
       type: 'RELOCATE_STATION',
       requestId,
@@ -238,6 +327,7 @@ export const App: React.FC = () => {
   const handleResetStations = () => {
     if (!tiltSession) return;
     const requestId = ++reqIdRef.current;
+    activeTiltStationReqRef.current = requestId;
     sendWorkerRequest({
       type: 'RESET_STATIONS',
       requestId,
@@ -302,7 +392,7 @@ export const App: React.FC = () => {
                   id="btn-switch-tilt-preset"
                   type="button"
                   disabled={isBusy}
-                  onClick={() => setTiltSession(null)}
+                  onClick={handleCloseTiltSession}
                   className="btn-instrument"
                 >
                   返回标定台
@@ -352,7 +442,7 @@ export const App: React.FC = () => {
                       ? `${activeMeta.focalLengthMm.toFixed(0)}mm`
                       : null,
                     activeMeta.fNumber ? `f/${activeMeta.fNumber.toFixed(1)}` : null,
-                    activeMeta.shutterDisplay ? `${activeMeta.shutterDisplay}s` : null,
+                    activeMeta.shutterDisplay,
                     activeMeta.iso ? `ISO ${activeMeta.iso}` : null,
                   ]
                     .filter(Boolean)
@@ -466,7 +556,7 @@ export const App: React.FC = () => {
         ) : noiseSeries ? (
           <NoiseChart
             series={noiseSeries}
-            onClear={() => setNoiseSeries(null)}
+            onClear={handleClearNoiseSeries}
           />
         ) : (
           <DropZone

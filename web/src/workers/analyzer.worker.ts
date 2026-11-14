@@ -24,12 +24,43 @@ declare const self: DedicatedWorkerGlobalScope;
 
 let wasmReadyPromise: Promise<unknown> | null = null;
 let activeSession: RawSession | null = null;
+let workerTaskChain: Promise<void> = Promise.resolve();
+let latestTiltOpenReqId = 0;
+let closedTiltFloorReqId = 0;
+let latestNoiseReqId = 0;
 
 function ensureWasm(): Promise<unknown> {
   if (!wasmReadyPromise) {
-    wasmReadyPromise = initWasm();
+    wasmReadyPromise = initWasm().catch((err) => {
+      wasmReadyPromise = null;
+      throw err;
+    });
   }
   return wasmReadyPromise;
+}
+
+function disposeActiveSession() {
+  if (activeSession) {
+    try {
+      activeSession.free();
+    } catch {
+      // Ignore double-free or already-disposed handle errors
+    }
+    activeSession = null;
+  }
+}
+
+function disambiguateFilename(existing: DarkFrameReport[], rawName: string): string {
+  const names = new Set(existing.map((f) => f.filename));
+  if (!names.has(rawName)) return rawName;
+  const dotIdx = rawName.lastIndexOf('.');
+  const stem = dotIdx > 0 ? rawName.slice(0, dotIdx) : rawName;
+  const ext = dotIdx > 0 ? rawName.slice(dotIdx) : '';
+  let n = 2;
+  while (names.has(`${stem} (#${n})${ext}`)) {
+    n++;
+  }
+  return `${stem} (#${n})${ext}`;
 }
 
 /**
@@ -87,10 +118,11 @@ function openSessionFromBytes(
   patchMode: PatchRenderModeCode,
   patchSize: number,
 ) {
-  if (activeSession) {
-    activeSession.free();
-    activeSession = null;
+  if (requestId < latestTiltOpenReqId || requestId <= closedTiltFloorReqId) {
+    return;
   }
+
+  disposeActiveSession();
 
   postWorkerMessage({
     type: 'PROGRESS',
@@ -101,60 +133,78 @@ function openSessionFromBytes(
   });
 
   const session = new RawSession(bytes, filename);
-  activeSession = session;
+  try {
+    const summary = session.getSummary() as {
+      metadata: RawImageMetadata;
+      sharpness: SharpnessReport;
+      noise: DarkFrameReport;
+    };
 
-  const summary = session.getSummary() as {
-    metadata: RawImageMetadata;
-    sharpness: SharpnessReport;
-    noise: DarkFrameReport;
-  };
-
-  postWorkerMessage({
-    type: 'PROGRESS',
-    requestId,
-    stage: '正在生成色彩标定 2×2 预览轨与九宫格 1:1 采样切片…',
-    completed: 2,
-    total: 3,
-  });
-
-  const overviewRgba = session.renderOverviewRgba(1680, evBoost);
-  const overviewDesc = session.lastImageDesc() as ImageBufferDesc;
-  const overviewBuffer = toTransferableBuffer(overviewRgba);
-
-  const { patchDescs, patchBuffers } = renderAllPatches(
-    session,
-    summary.sharpness,
-    patchSize,
-    patchMode,
-    evBoost,
-  );
-
-  postWorkerMessage(
-    {
-      type: 'SESSION_READY',
+    postWorkerMessage({
+      type: 'PROGRESS',
       requestId,
-      filename,
-      metadata: summary.metadata,
-      sharpness: summary.sharpness,
-      noise: summary.noise,
-      overviewDesc,
-      overviewBuffer,
-      patchDescs,
-      patchBuffers,
-      evBoost,
+      stage: '正在生成色彩标定 2×2 预览轨与九宫格 1:1 采样切片…',
+      completed: 2,
+      total: 3,
+    });
+
+    const overviewRgba = session.renderOverviewRgba(1680, evBoost);
+    const overviewDesc = session.lastImageDesc() as ImageBufferDesc;
+    const overviewBuffer = toTransferableBuffer(overviewRgba);
+
+    const { patchDescs, patchBuffers } = renderAllPatches(
+      session,
+      summary.sharpness,
+      patchSize,
       patchMode,
-    },
-    [overviewBuffer, ...patchBuffers],
-  );
+      evBoost,
+    );
+
+    activeSession = session;
+
+    postWorkerMessage(
+      {
+        type: 'SESSION_READY',
+        requestId,
+        filename,
+        metadata: summary.metadata,
+        sharpness: summary.sharpness,
+        noise: summary.noise,
+        overviewDesc,
+        overviewBuffer,
+        patchDescs,
+        patchBuffers,
+        evBoost,
+        patchMode,
+      },
+      [overviewBuffer, ...patchBuffers],
+    );
+  } catch (err) {
+    session.free();
+    throw err;
+  }
 }
 
-self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
-  const req = event.data;
+async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
   try {
+    if (req.type === 'CLOSE_SESSION') {
+      disposeActiveSession();
+      return;
+    }
+    if (req.type === 'CANCEL_NOISE_BATCH') {
+      return;
+    }
+
     await ensureWasm();
 
     switch (req.type) {
       case 'OPEN_RAW_FILE': {
+        if (
+          req.requestId < latestTiltOpenReqId ||
+          req.requestId <= closedTiltFloorReqId
+        ) {
+          return;
+        }
         postWorkerMessage({
           type: 'PROGRESS',
           requestId: req.requestId,
@@ -163,6 +213,12 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
           total: 3,
         });
         const arrayBuf = await req.file.arrayBuffer();
+        if (
+          req.requestId < latestTiltOpenReqId ||
+          req.requestId <= closedTiltFloorReqId
+        ) {
+          return;
+        }
         const bytes = new Uint8Array(arrayBuf);
         openSessionFromBytes(
           req.requestId,
@@ -176,6 +232,12 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
 
       case 'OPEN_SYNTHETIC_PRESET': {
+        if (
+          req.requestId < latestTiltOpenReqId ||
+          req.requestId <= closedTiltFloorReqId
+        ) {
+          return;
+        }
         postWorkerMessage({
           type: 'PROGRESS',
           requestId: req.requestId,
@@ -209,6 +271,12 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
 
       case 'UPDATE_RENDER_PARAMS': {
+        if (
+          req.requestId < latestTiltOpenReqId ||
+          req.requestId <= closedTiltFloorReqId
+        ) {
+          return;
+        }
         if (!activeSession) {
           throw new Error('当前无活动 RAW 会话');
         }
@@ -244,6 +312,12 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
 
       case 'RELOCATE_STATION': {
+        if (
+          req.requestId < latestTiltOpenReqId ||
+          req.requestId <= closedTiltFloorReqId
+        ) {
+          return;
+        }
         if (!activeSession) {
           throw new Error('当前无活动 RAW 会话');
         }
@@ -280,6 +354,12 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
 
       case 'RESET_STATIONS': {
+        if (
+          req.requestId < latestTiltOpenReqId ||
+          req.requestId <= closedTiltFloorReqId
+        ) {
+          return;
+        }
         if (!activeSession) {
           throw new Error('当前无活动 RAW 会话');
         }
@@ -306,11 +386,18 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
 
       case 'ANALYZE_NOISE_BATCH': {
+        if (req.requestId < latestNoiseReqId) {
+          return;
+        }
         const mergedFrames: DarkFrameReport[] = [...req.existingFrames];
+        const batchSeenIdentical = new Set<string>();
         const total = req.files.length;
 
         // Sequential one-file-at-a-time streaming inside Worker: avoids OOM on 10x 60MP RAW dark frames!
         for (let i = 0; i < total; i++) {
+          if (req.requestId < latestNoiseReqId) {
+            return;
+          }
           const file = req.files[i];
           postWorkerMessage({
             type: 'PROGRESS',
@@ -321,19 +408,45 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
           });
 
           const buf = await file.arrayBuffer();
+          if (req.requestId < latestNoiseReqId) {
+            return;
+          }
           const report = analyze_dark_frame(
             new Uint8Array(buf),
             file.name,
           ) as DarkFrameReport;
 
+          const exactKey = `${report.filename}::${report.iso}::${report.channels[1].measuredMean.toFixed(6)}::${report.meanReadNoiseAdu.toFixed(6)}`;
           const dupIdx = mergedFrames.findIndex(
             (f) => f.filename === report.filename && f.iso === report.iso,
           );
           if (dupIdx >= 0) {
-            mergedFrames[dupIdx] = report;
+            const existing = mergedFrames[dupIdx];
+            const isExactSameCapture =
+              !batchSeenIdentical.has(exactKey) &&
+              existing.channels[1].sampleCount === report.channels[1].sampleCount &&
+              Math.abs(
+                existing.channels[1].measuredMean - report.channels[1].measuredMean,
+              ) < 1e-6 &&
+              Math.abs(existing.meanReadNoiseAdu - report.meanReadNoiseAdu) < 1e-6;
+            if (isExactSameCapture) {
+              mergedFrames[dupIdx] = report;
+              batchSeenIdentical.add(exactKey);
+            } else {
+              report.filename = disambiguateFilename(mergedFrames, report.filename);
+              mergedFrames.push(report);
+            }
           } else {
+            if (mergedFrames.some((f) => f.filename === report.filename)) {
+              report.filename = disambiguateFilename(mergedFrames, report.filename);
+            }
             mergedFrames.push(report);
+            batchSeenIdentical.add(exactKey);
           }
+        }
+
+        if (req.requestId < latestNoiseReqId) {
+          return;
         }
 
         const series = analyze_iso_series_json(
@@ -349,10 +462,16 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
 
       case 'GENERATE_SYNTHETIC_ISO_SERIES': {
+        if (req.requestId < latestNoiseReqId) {
+          return;
+        }
         const isoSteps = [100, 200, 400, 640, 800, 1600, 3200, 6400];
         const frames: DarkFrameReport[] = [];
 
         for (let i = 0; i < isoSteps.length; i++) {
+          if (req.requestId < latestNoiseReqId) {
+            return;
+          }
           const iso = isoSteps[i];
           postWorkerMessage({
             type: 'PROGRESS',
@@ -367,6 +486,10 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
             `synth_dual_gain_ISO${iso}.dng`,
           ) as DarkFrameReport;
           frames.push(report);
+        }
+
+        if (req.requestId < latestNoiseReqId) {
+          return;
         }
 
         const series = analyze_iso_series_json(
@@ -390,4 +513,22 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       message,
     });
   }
+}
+
+self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+  const req = event.data;
+  if (req.type === 'OPEN_RAW_FILE' || req.type === 'OPEN_SYNTHETIC_PRESET') {
+    latestTiltOpenReqId = Math.max(latestTiltOpenReqId, req.requestId);
+  } else if (req.type === 'CLOSE_SESSION') {
+    latestTiltOpenReqId = Math.max(latestTiltOpenReqId, req.requestId);
+    closedTiltFloorReqId = Math.max(closedTiltFloorReqId, req.requestId);
+  } else if (
+    req.type === 'ANALYZE_NOISE_BATCH' ||
+    req.type === 'GENERATE_SYNTHETIC_ISO_SERIES' ||
+    req.type === 'CANCEL_NOISE_BATCH'
+  ) {
+    latestNoiseReqId = Math.max(latestNoiseReqId, req.requestId);
+  }
+
+  workerTaskChain = workerTaskChain.then(() => handleWorkerRequest(req));
 };
