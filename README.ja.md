@@ -36,7 +36,7 @@
 
 | エンジン | 対応カメラ・圧縮方式 |
 | --- | --- |
-| [`flashraw 0.2`](https://github.com/ybouane/flashraw) | 約 40 種類の RAW：**Sony `.ARW` / `.ARQ`**（α7 V / α7R VI の `ARW 6.0` `X-OCN / LLVC3`「圧縮 HQ」・ロスレス圧縮対応）、**Canon `.CR3` / `.CR2`**、従来の **Nikon `.NEF`**、**Adobe `.DNG`**（DNG 1.7 JPEG XL 対応）、**Fujifilm `.RAF`**（X-Trans 対応）、**Lumix/Leica `.RW2` / `.RWL`**、**OM `.ORF`**、**Pentax `.PEF`**、**Hasselblad `.3FR`**、**Phase One `.IIQ`**。 |
+| [`flashraw 0.3`](https://github.com/ybouane/flashraw) | 約 40 種類の RAW：**Sony `.ARW` / `.ARQ`**（α7 V / α7R VI の `ARW 6.0` `X-OCN / LLVC3`「圧縮 HQ」・ロスレス圧縮対応）、**Canon `.CR3` / `.CR2`**、従来の **Nikon `.NEF`**、**Adobe `.DNG`**（DNG 1.7 JPEG XL 対応）、**Fujifilm `.RAF`**（X-Trans 対応）、**Lumix/Leica `.RW2` / `.RWL`**、**OM `.ORF`**、**Pentax `.PEF`**、**Hasselblad `.3FR`**、**Phase One `.IIQ`**。 |
 | [`ticoraw 0.2`](https://github.com/lukaj99/ticoraw) | **Nikon 高効率圧縮 `.NEF`（`HE` / `HE*`）** 専用純 Rust ビット正確 JPEG XS ウェーブレットデコーダ。Z9、Z8、Zf、Z6III、Z5II、Z50II、ZR に対応（EXIF は `flashraw` と自動統合）。 |
 
 ---

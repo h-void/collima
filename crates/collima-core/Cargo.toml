@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 # Primary pure-Rust RAW engine: supports ~40 formats including Sony ARW6 (latest video-RAW-derived
 # wavelet compression), Sony Lossless ARW, Canon CR3 (CRX + C-RAW) & CR2, classic Nikon NEF,
 # DNG (incl. JPEG XL DNG 1.7), Fujifilm RAF, Panasonic/Leica RW2/RWL, Olympus ORF, Pentax PEF.
-flashraw = { version = "0.2.0", default-features = false, features = ["simd", "jpegxl", "serde"] }
+flashraw = { version = "0.3.1", default-features = false, features = ["simd", "jpegxl", "serde"] }
 
 # Dedicated clean-room Rust decoder for Nikon High Efficiency (HE / HE*) NEF files
 # (intoPIX TicoRAW / N-RAW JPEG XS wavelet compression on Z9, Z8, Zf, Z6III, Z5II, Z50II, ZR).
@@ -28,7 +28,7 @@ js-sys = "0.3"
 console_error_panic_hook = "0.1.7"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-flashraw = { version = "0.2.0", default-features = false, features = ["simd", "jpegxl", "serde", "rayon"] }
+flashraw = { version = "0.3.1", default-features = false, features = ["simd", "jpegxl", "serde", "rayon"] }
 ticoraw = { version = "0.2.0", default-features = false, features = ["parallel"] }
 
 [package.metadata.wasm-pack.profile.release]

@@ -36,7 +36,7 @@ A 100% local, cross-platform camera RAW optical and sensor metrology workbench (
 
 | Engine | Cameras & Compression Codecs |
 | --- | --- |
-| [`flashraw 0.2`](https://github.com/ybouane/flashraw) | ~40 RAW formats: **Sony `.ARW` / `.ARQ`** (incl. `ARW 6.0` `X-OCN / LLVC3` *Compressed HQ* on α7 V / α7R VI & Lossless), **Canon `.CR3` / `.CR2`**, classic **Nikon `.NEF`**, **Adobe `.DNG`** (incl. DNG 1.7 JPEG XL), **Fujifilm `.RAF`** (incl. X-Trans), **Lumix/Leica `.RW2` / `.RWL`**, **OM `.ORF`**, **Pentax `.PEF`**, **Hasselblad `.3FR`**, **Phase One `.IIQ`**. |
+| [`flashraw 0.3`](https://github.com/ybouane/flashraw) | ~40 RAW formats: **Sony `.ARW` / `.ARQ`** (incl. `ARW 6.0` `X-OCN / LLVC3` *Compressed HQ* on α7 V / α7R VI & Lossless), **Canon `.CR3` / `.CR2`**, classic **Nikon `.NEF`**, **Adobe `.DNG`** (incl. DNG 1.7 JPEG XL), **Fujifilm `.RAF`** (incl. X-Trans), **Lumix/Leica `.RW2` / `.RWL`**, **OM `.ORF`**, **Pentax `.PEF`**, **Hasselblad `.3FR`**, **Phase One `.IIQ`**. |
 | [`ticoraw 0.2`](https://github.com/lukaj99/ticoraw) | **Nikon High Efficiency `.NEF` (`HE` & `HE*`)** clean-room bit-exact JPEG XS wavelet decoder for Z9, Z8, Zf, Z6III, Z5II, Z50II, and ZR (with EXIF fused via `flashraw`). |
 
 ---

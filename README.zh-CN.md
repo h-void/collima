@@ -36,7 +36,7 @@
 
 | 解码引擎 | 覆盖相机与压缩格式 |
 | --- | --- |
-| [`flashraw 0.2`](https://github.com/ybouane/flashraw) | 约 40 种 RAW 格式：**索尼 `.ARW` / `.ARQ`**（含 α7 V / α7R VI 的 `ARW 6.0` `X-OCN / LLVC3`「已压缩 HQ」与无损压缩）、**佳能 `.CR3` / `.CR2`**、传统**尼康 `.NEF`**、**Adobe `.DNG`**（含 DNG 1.7 JPEG XL）、**富士 `.RAF`**（含 X-Trans）、**松下/徕卡 `.RW2` / `.RWL`**、**奥林巴斯/OM `.ORF`**、**宾得 `.PEF`**、**哈苏 `.3FR`**、**飞思 `.IIQ`**。 |
+| [`flashraw 0.3`](https://github.com/ybouane/flashraw) | 约 40 种 RAW 格式：**索尼 `.ARW` / `.ARQ`**（含 α7 V / α7R VI 的 `ARW 6.0` `X-OCN / LLVC3`「已压缩 HQ」与无损压缩）、**佳能 `.CR3` / `.CR2`**、传统**尼康 `.NEF`**、**Adobe `.DNG`**（含 DNG 1.7 JPEG XL）、**富士 `.RAF`**（含 X-Trans）、**松下/徕卡 `.RW2` / `.RWL`**、**奥林巴斯/OM `.ORF`**、**宾得 `.PEF`**、**哈苏 `.3FR`**、**飞思 `.IIQ`**。 |
 | [`ticoraw 0.2`](https://github.com/lukaj99/ticoraw) | **尼康高效率压缩 `.NEF`（`HE` / `HE*`）** 纯 Rust 位精确 JPEG XS 小波解码器，支持 Z9、Z8、Zf、Z6III、Z5II、Z50II、ZR（自动融合 `flashraw` EXIF 元数据）。 |
 
 ---

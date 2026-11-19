@@ -999,7 +999,7 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         orientation_exif,
         format_name,
         compression_name,
-        decoder_engine: "flashraw 0.2 (SIMD)".to_string(),
+        decoder_engine: "flashraw 0.3 (SIMD)".to_string(),
         decode_ms,
         warnings,
     };

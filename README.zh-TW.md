@@ -36,7 +36,7 @@
 
 | 解碼引擎 | 涵蓋相機與壓縮格式 |
 | --- | --- |
-| [`flashraw 0.2`](https://github.com/ybouane/flashraw) | 約 40 種 RAW 格式：**Sony `.ARW` / `.ARQ`**（含 α7 V / α7R VI 之 `ARW 6.0` `X-OCN / LLVC3`「已壓縮 HQ」與無損壓縮）、**Canon `.CR3` / `.CR2`**、傳統 **Nikon `.NEF`**、**Adobe `.DNG`**（含 DNG 1.7 JPEG XL）、**Fujifilm `.RAF`**（含 X-Trans）、**Panasonic/Leica `.RW2` / `.RWL`**、**OM/Olympus `.ORF`**、**Pentax `.PEF`**、**Hasselblad `.3FR`**、**Phase One `.IIQ`**。 |
+| [`flashraw 0.3`](https://github.com/ybouane/flashraw) | 約 40 種 RAW 格式：**Sony `.ARW` / `.ARQ`**（含 α7 V / α7R VI 之 `ARW 6.0` `X-OCN / LLVC3`「已壓縮 HQ」與無損壓縮）、**Canon `.CR3` / `.CR2`**、傳統 **Nikon `.NEF`**、**Adobe `.DNG`**（含 DNG 1.7 JPEG XL）、**Fujifilm `.RAF`**（含 X-Trans）、**Panasonic/Leica `.RW2` / `.RWL`**、**OM/Olympus `.ORF`**、**Pentax `.PEF`**、**Hasselblad `.3FR`**、**Phase One `.IIQ`**。 |
 | [`ticoraw 0.2`](https://github.com/lukaj99/ticoraw) | **Nikon 高效率壓縮 `.NEF`（`HE` / `HE*`）** 純 Rust 位元精確 JPEG XS 小波解碼器，支援 Z9、Z8、Zf、Z6III、Z5II、Z50II、ZR（自動融合 `flashraw` EXIF 中繼資料）。 |
 
 ---
