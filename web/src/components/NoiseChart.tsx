@@ -2,7 +2,8 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   AlertTriangle,
-  BarChart3,
+  ChevronLeft,
+  ChevronRight,
   Download,
   FileSpreadsheet,
   Trash2,
@@ -26,11 +27,11 @@ interface NoiseChartProps {
 type ChannelView = 'mean' | 'all_channels' | 'R' | 'G1' | 'G2' | 'B';
 type NoiseAxisMode = 'raw_adu' | 'iso100_norm';
 
-const CHANNEL_COLORS: Record<'R' | 'G1' | 'G2' | 'B', string> = {
-  R: 'hsl(4, 80%, 62%)',
-  G1: 'hsl(150, 65%, 48%)',
-  G2: 'hsl(166, 62%, 46%)',
-  B: 'hsl(201, 86%, 58%)',
+const CHANNEL_VARS: Record<'R' | 'G1' | 'G2' | 'B', string> = {
+  R: 'var(--channel-r)',
+  G1: 'var(--channel-g1)',
+  G2: 'var(--channel-g2)',
+  B: 'var(--channel-b)',
 };
 
 function readChannelNoise(
@@ -128,6 +129,16 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
 
   const activeFrame: DarkFrameReport | undefined = frames[safeSelectedIdx];
 
+  const selectFrameByIdx = useCallback(
+    (idx: number) => {
+      if (frames.length === 0) return;
+      const wrapped = ((idx % frames.length) + frames.length) % frames.length;
+      const target = frames[wrapped];
+      setSelectedFrameKey(`${target.filename}::${target.iso}`);
+    },
+    [frames],
+  );
+
   const localizedSummary = useMemo(
     () => localizeNoiseSeriesSummary(series, locale),
     [series, locale],
@@ -147,14 +158,39 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
     [noiseAxisMode],
   );
 
+  // Aggregate Series KPIs
+  const kpis = useMemo(() => {
+    if (frames.length === 0) return null;
+    let minNoiseFrame = frames[0];
+    let maxDrFrame = frames[0];
+    let sumBlDrift = 0;
+
+    for (const f of frames) {
+      if (f.meanReadNoiseAdu < minNoiseFrame.meanReadNoiseAdu) {
+        minNoiseFrame = f;
+      }
+      if (f.meanEngineeringDrEv > maxDrFrame.meanEngineeringDrEv) {
+        maxDrFrame = f;
+      }
+      sumBlDrift += f.meanBlackOffsetAdu;
+    }
+
+    return {
+      minNoiseFrame,
+      maxDrFrame,
+      meanBlDrift: sumBlDrift / frames.length,
+      primaryInflection: series.inflections[0] ?? null,
+    };
+  }, [frames, series.inflections]);
+
   // Compute SVG chart geometry, per-ISO aggregated curve buckets & duplicate-ISO node offsets
   const chartGeom = useMemo(() => {
-    const W = 860;
-    const H = 370;
-    const padL = 66;
-    const padR = 64;
-    const padT = 32;
-    const padB = 46;
+    const W = 880;
+    const H = 356;
+    const padL = 62;
+    const padR = 62;
+    const padT = 30;
+    const padB = 44;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
@@ -237,9 +273,10 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
     const logNoiseSpan = Math.max(1e-6, maxLogNoise - minLogNoise);
     const drSpan = Math.max(1e-6, maxDr - minDr);
 
+    const insetX = 18;
     const xOfIso = (iso: number) => {
       const lv = iso > 0 ? Math.log2(iso) : unknownLogPos;
-      return padL + ((lv - minLogIso) / logIsoSpan) * plotW;
+      return padL + insetX + ((lv - minLogIso) / logIsoSpan) * (plotW - insetX * 2);
     };
 
     const yOfNoise = (val: number) => {
@@ -253,7 +290,6 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       return padT + (1 - (safe - minDr) / drSpan) * plotH;
     };
 
-    // Generate clean ticks
     const noiseTicks: number[] = [];
     const stepLog =
       logNoiseSpan > 8 ? 2.0 : logNoiseSpan > 4.5 ? 1.0 : 0.5;
@@ -277,7 +313,6 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
 
     const uniqueIsos = hasUnknownIso ? [...knownIsos, 0] : knownIsos;
 
-    // Group frames by ISO bucket for clean curve averaging + per-node horizontal jitter on duplicate ISOs
     const bucketMap = new Map<number, number[]>();
     frames.forEach((f, idx) => {
       const arr = bucketMap.get(f.iso);
@@ -299,7 +334,6 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       }
     }
 
-    // Only connect known positive ISOs on the continuous trend polyline (unknown ISO = 0 stays an isolated marker)
     const curveBuckets = knownIsos.map((iso) => ({
       iso,
       indices: bucketMap.get(iso) ?? [],
@@ -401,42 +435,34 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
   };
 
   return (
-    <div className="max-w-[1680px] mx-auto w-full px-4 py-4 space-y-4">
-      {/* Top Summary & Inflection Callouts */}
-      <section className="instrument-panel p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">
+    <div className="flex-1 flex flex-col min-w-0">
+      {/* Top Report Header & Actions Bar */}
+      <section className="px-4 py-3 bg-[var(--bg-panel)] border-b border-[var(--hairline-default)] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div className="space-y-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-sm font-semibold text-[var(--text-primary)] m-0">
               {t.noise.reportTitle(series.cameraModel)}
             </h2>
             <span className="status-tag">
               {t.noise.frameCountBadge(frames.length)}
             </span>
+            {series.inflections.map((inf, i) => (
+              <span key={i} className="status-tag status-tag--pass">
+                <Zap size={11} />
+                <span>
+                  {t.noise.inflectionBadge(
+                    inf.fromIso,
+                    inf.toIso,
+                    inf.normNoiseDropPct.toFixed(1),
+                    inf.drReboundEv.toFixed(2),
+                  )}
+                </span>
+              </span>
+            ))}
           </div>
-          <p className="text-xs text-[var(--text-secondary)]">
+          <p className="text-xs text-[var(--text-secondary)] m-0 leading-relaxed">
             {localizedSummary}
           </p>
-
-          {series.inflections.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              {series.inflections.map((inf, i) => (
-                <span
-                  key={i}
-                  className="status-tag status-tag--pass flex items-center gap-1.5"
-                >
-                  <Zap size={12} />
-                  <span>
-                    {t.noise.inflectionBadge(
-                      inf.fromIso,
-                      inf.toIso,
-                      inf.normNoiseDropPct.toFixed(1),
-                      inf.drReboundEv.toFixed(2),
-                    )}
-                  </span>
-                </span>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -446,7 +472,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             onClick={handleExportCsv}
             className="btn-instrument"
           >
-            <FileSpreadsheet size={14} className="text-[var(--optical-green)]" />
+            <FileSpreadsheet size={13} className="text-[var(--optical-green)]" />
             <span>{t.noise.btnExportCsv}</span>
           </button>
           <button
@@ -455,42 +481,99 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             onClick={handleExportJson}
             className="btn-instrument"
           >
-            <Download size={14} className="text-[var(--accent-amber)]" />
+            <Download size={13} className="text-[var(--accent-amber)]" />
             <span>{t.noise.btnExportJson}</span>
           </button>
           <button
             id="btn-clear-noise-series"
             type="button"
             onClick={onClear}
-            className="btn-instrument"
+            className="btn-instrument btn-danger-hover"
           >
-            <Trash2 size={14} className="text-[var(--alert-coral)]" />
+            <Trash2 size={13} />
             <span>{t.noise.btnClearSeries}</span>
           </button>
         </div>
       </section>
 
-      {/* Main Dual-Axis Interactive Chart + G1 Bell-Curve Histogram Inspector */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+      {/* 4-Column Sensor Metrology KPI Strip */}
+      {kpis && (
+        <section className="grid grid-cols-2 lg:grid-cols-4 bg-[var(--bg-panel-subtle)] border-b border-[var(--hairline-default)] divide-x divide-y lg:divide-y-0 divide-[var(--hairline-subtle)]">
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+            <span className="text-xs text-[var(--text-muted)]">
+              {t.noise.kpiBaseNoise}
+            </span>
+            <div className="text-right mono-num">
+              <span className="text-[13.5px] font-semibold text-[var(--text-primary)]">
+                {kpis.minNoiseFrame.meanReadNoiseAdu.toFixed(3)} ADU
+              </span>
+              <span className="text-[11px] text-[var(--text-muted)] ml-1.5">
+                @ {formatIsoText(kpis.minNoiseFrame.iso)}
+              </span>
+            </div>
+          </div>
+
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+            <span className="text-xs text-[var(--text-muted)]">
+              {t.noise.kpiPeakDr}
+            </span>
+            <div className="text-right mono-num">
+              <span className="text-[13.5px] font-semibold text-[var(--optical-green)]">
+                {kpis.maxDrFrame.meanEngineeringDrEv.toFixed(2)} EV
+              </span>
+              <span className="text-[11px] text-[var(--text-muted)] ml-1.5">
+                @ {formatIsoText(kpis.maxDrFrame.iso)}
+              </span>
+            </div>
+          </div>
+
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+            <span className="text-xs text-[var(--text-muted)]">
+              {t.noise.kpiGainArch}
+            </span>
+            <span
+              className={`mono-num text-xs font-semibold ${
+                kpis.primaryInflection
+                  ? 'text-[var(--optical-green)]'
+                  : 'text-[var(--text-primary)]'
+              }`}
+            >
+              {kpis.primaryInflection
+                ? t.noise.kpiDualGain(kpis.primaryInflection.toIso)
+                : t.noise.kpiSingleGain}
+            </span>
+          </div>
+
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+            <span className="text-xs text-[var(--text-muted)]">
+              {t.noise.kpiMeanBlDrift}
+            </span>
+            <span className="mono-num text-[13.5px] font-semibold text-[var(--text-primary)]">
+              {kpis.meanBlDrift >= 0 ? '+' : ''}
+              {kpis.meanBlDrift.toFixed(2)} ADU
+            </span>
+          </div>
+        </section>
+      )}
+
+      {/* Upper Split Workspace: Interactive Dual-Axis Plot + Linked Frame Inspector */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_410px] border-b border-[var(--hairline-default)]">
+        {/* Left Pane: Dual-Axis ISO Plot */}
         <section
           aria-label={t.noise.chartSectionAria}
-          className="xl:col-span-8 instrument-panel overflow-hidden"
+          className="flex flex-col min-w-0 bg-[var(--bg-app)]"
         >
-          <div className="panel-header">
-            <h3 className="panel-title">
-              <BarChart3 size={15} className="text-[var(--accent-amber)]" />
-              <span>{t.noise.chartPanelTitle}</span>
-            </h3>
-
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="viewport-toolbar">
+            <div className="flex items-center gap-3 flex-wrap">
               {/* Left Axis Metric Switch */}
               <div className="segmented-control">
                 <button
                   id="btn-axis-raw-adu"
                   type="button"
                   onClick={() => setNoiseAxisMode('raw_adu')}
-                  className={`segmented-btn ${noiseAxisMode === 'raw_adu' ? 'is-active' : ''}`}
-                  style={{ padding: '0.24rem 0.58rem', fontSize: '0.74rem' }}
+                  className={`segmented-btn ${
+                    noiseAxisMode === 'raw_adu' ? 'is-active' : ''
+                  }`}
                 >
                   {t.noise.axisRawAduBtn}
                 </button>
@@ -498,25 +581,48 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   id="btn-axis-iso100-norm"
                   type="button"
                   onClick={() => setNoiseAxisMode('iso100_norm')}
-                  className={`segmented-btn ${noiseAxisMode === 'iso100_norm' ? 'is-active' : ''}`}
-                  style={{ padding: '0.24rem 0.58rem', fontSize: '0.74rem' }}
+                  className={`segmented-btn ${
+                    noiseAxisMode === 'iso100_norm' ? 'is-active' : ''
+                  }`}
                 >
                   {t.noise.axisIso100Btn}
                 </button>
               </div>
 
-              {/* Channel Selector */}
-              <div className="segmented-control">
-                {(
-                  [
-                    ['mean', t.noise.channelMean],
-                    ['all_channels', t.noise.channelAll],
-                    ['R', 'R'],
-                    ['G1', 'G1'],
-                    ['G2', 'G2'],
-                    ['B', 'B'],
-                  ] as [ChannelView, string][]
-                ).map(([key, label]) => (
+              {/* Clean Curve Legend */}
+              <div className="hidden sm:flex items-center gap-3 text-[11px] text-[var(--text-muted)]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="w-3.5 h-[2px] rounded-full"
+                    style={{ background: 'var(--accent-amber)' }}
+                  />
+                  <span>{t.noise.legendNoiseSolid}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="w-3.5 border-t-2 border-dashed"
+                    style={{ borderColor: 'var(--optical-green)' }}
+                  />
+                  <span>{t.noise.legendDrDashed}</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Channel Selector */}
+            <div className="segmented-control">
+              {(
+                [
+                  ['mean', t.noise.channelMean],
+                  ['all_channels', t.noise.channelAll],
+                  ['R', 'R'],
+                  ['G1', 'G1'],
+                  ['G2', 'G2'],
+                  ['B', 'B'],
+                ] as [ChannelView, string][]
+              ).map(([key, label]) => {
+                const isBayer =
+                  key === 'R' || key === 'G1' || key === 'G2' || key === 'B';
+                return (
                   <button
                     key={key}
                     id={`btn-channel-filter-${key}`}
@@ -525,16 +631,21 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                     className={`segmented-btn mono-num ${
                       channelView === key ? 'is-active' : ''
                     }`}
-                    style={{ padding: '0.24rem 0.52rem', fontSize: '0.73rem' }}
                   >
-                    {label}
+                    {isBayer && (
+                      <span
+                        className="w-1.5 h-1.5 rounded-full"
+                        style={{ backgroundColor: CHANNEL_VARS[key] }}
+                      />
+                    )}
+                    <span>{label}</span>
                   </button>
-                ))}
-              </div>
+                );
+              })}
             </div>
           </div>
 
-          <div className="p-4">
+          <div className="p-4 flex-1 flex items-center">
             {chartGeom && (
               <svg
                 viewBox={`0 0 ${chartGeom.W} ${chartGeom.H}`}
@@ -542,7 +653,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                 role="img"
                 aria-label={t.noise.svgAria}
               >
-                {/* Horizontal Subtle Reference Lines (Left Noise Log Ticks) */}
+                {/* Horizontal Reference Lines (Left Noise Log Ticks) */}
                 {chartGeom.noiseTicks.map((tv, idx) => {
                   const y = chartGeom.yOfNoise(tv);
                   return (
@@ -552,16 +663,16 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         y1={y}
                         x2={chartGeom.W - chartGeom.padR}
                         y2={y}
-                        stroke="hsla(210, 16%, 85%, 0.07)"
+                        stroke="var(--chart-grid)"
                         strokeWidth="1"
                       />
                       <text
                         x={chartGeom.padL - 10}
                         y={y + 4}
                         textAnchor="end"
-                        fontSize="11"
+                        fontSize="10.5"
                         fontFamily="JetBrains Mono, monospace"
-                        fill="hsl(37, 88%, 62%)"
+                        fill="var(--accent-amber)"
                       >
                         {tv >= 10
                           ? tv.toFixed(1)
@@ -582,9 +693,9 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                       x={chartGeom.W - chartGeom.padR + 10}
                       y={y + 4}
                       textAnchor="start"
-                      fontSize="11"
+                      fontSize="10.5"
                       fontFamily="JetBrains Mono, monospace"
-                      fill="hsl(152, 65%, 56%)"
+                      fill="var(--optical-green)"
                     >
                       {ev.toFixed(1)} EV
                     </text>
@@ -601,15 +712,15 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         y1={chartGeom.padT}
                         x2={x}
                         y2={chartGeom.H - chartGeom.padB}
-                        stroke="hsla(210, 16%, 85%, 0.05)"
+                        stroke="var(--chart-grid-minor)"
                       />
                       <text
                         x={x}
-                        y={chartGeom.H - chartGeom.padB + 20}
+                        y={chartGeom.H - chartGeom.padB + 19}
                         textAnchor="middle"
-                        fontSize="11"
+                        fontSize="10.5"
                         fontFamily="JetBrains Mono, monospace"
-                        fill="hsl(214, 12%, 68%)"
+                        fill="var(--text-secondary)"
                       >
                         {iso > 0 ? iso : t.noise.isoUnknownShort}
                       </text>
@@ -620,9 +731,9 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                 {/* Axis Titles */}
                 <text
                   x={chartGeom.padL}
-                  y={18}
-                  fontSize="11"
-                  fill="hsl(37, 88%, 62%)"
+                  y={16}
+                  fontSize="10.5"
+                  fill="var(--accent-amber)"
                 >
                   {noiseAxisMode === 'raw_adu'
                     ? t.noise.leftAxisRawTitle
@@ -630,10 +741,10 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                 </text>
                 <text
                   x={chartGeom.W - chartGeom.padR}
-                  y={18}
+                  y={16}
                   textAnchor="end"
-                  fontSize="11"
-                  fill="hsl(152, 65%, 56%)"
+                  fontSize="10.5"
+                  fill="var(--optical-green)"
                 >
                   {t.noise.rightAxisDrTitle}
                 </text>
@@ -641,8 +752,8 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   x={chartGeom.W / 2}
                   y={chartGeom.H - 6}
                   textAnchor="middle"
-                  fontSize="11"
-                  fill="hsl(215, 10%, 50%)"
+                  fontSize="10.5"
+                  fill="var(--text-muted)"
                 >
                   {t.noise.bottomAxisIsoTitle}
                 </text>
@@ -657,26 +768,27 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         y1={chartGeom.padT}
                         x2={x}
                         y2={chartGeom.H - chartGeom.padB}
-                        stroke="hsl(152, 70%, 52%)"
-                        strokeWidth="1.5"
+                        stroke="var(--optical-green)"
+                        strokeWidth="1.4"
                         strokeDasharray="4 3"
                       />
                       <rect
-                        x={x - 54}
+                        x={x - 52}
                         y={chartGeom.padT + 4}
-                        width={108}
-                        height={20}
+                        width={104}
+                        height={19}
                         rx={4}
-                        fill="hsla(152, 55%, 14%, 0.92)"
-                        stroke="hsla(152, 62%, 48%, 0.45)"
+                        fill="var(--bg-panel)"
+                        stroke="var(--optical-green-border)"
                       />
                       <text
                         x={x}
-                        y={chartGeom.padT + 17}
+                        y={chartGeom.padT + 16.5}
                         textAnchor="middle"
-                        fontSize="10"
+                        fontSize="9.5"
+                        fontWeight="600"
                         fontFamily="JetBrains Mono, monospace"
-                        fill="hsl(152, 75%, 68%)"
+                        fill="var(--optical-green)"
                       >
                         HCG @ ISO {inf.toIso}
                       </text>
@@ -684,7 +796,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   );
                 })}
 
-                {/* Per-ISO Mean Curves (when >= 2 distinct positive ISOs exist) */}
+                {/* Per-ISO Mean Curves */}
                 {chartGeom.curveBuckets.length >= 2 &&
                   (channelView === 'all_channels' ? (
                     (['R', 'G1', 'G2', 'B'] as const).map((ch) => {
@@ -714,16 +826,16 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         <g key={ch}>
                           <polyline
                             fill="none"
-                            stroke={CHANNEL_COLORS[ch]}
-                            strokeWidth="2"
+                            stroke={CHANNEL_VARS[ch]}
+                            strokeWidth="1.9"
                             points={noisePts}
                           />
                           <polyline
                             fill="none"
-                            stroke={CHANNEL_COLORS[ch]}
-                            strokeWidth="1.4"
+                            stroke={CHANNEL_VARS[ch]}
+                            strokeWidth="1.3"
                             strokeDasharray="5 4"
-                            opacity={0.75}
+                            opacity={0.72}
                             points={drPts}
                           />
                         </g>
@@ -734,8 +846,8 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                       {/* Dynamic Range Curve (Right Axis, Dashed Optical Green) */}
                       <polyline
                         fill="none"
-                        stroke="hsl(152, 62%, 48%)"
-                        strokeWidth="2"
+                        stroke="var(--optical-green)"
+                        strokeWidth="1.8"
                         strokeDasharray="6 4"
                         points={chartGeom.curveBuckets
                           .map(({ iso, indices }) => {
@@ -751,15 +863,15 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                           .join(' ')}
                       />
 
-                      {/* Read Noise Curve (Left Axis, Solid Amber or Channel Color) */}
+                      {/* Read Noise Curve (Left Axis, Solid) */}
                       <polyline
                         fill="none"
                         stroke={
                           channelView === 'mean'
-                            ? 'hsl(37, 88%, 56%)'
-                            : CHANNEL_COLORS[channelView]
+                            ? 'var(--accent-amber)'
+                            : CHANNEL_VARS[channelView]
                         }
-                        strokeWidth="2.5"
+                        strokeWidth="2.2"
                         points={chartGeom.curveBuckets
                           .map(({ iso, indices }) => {
                             const meanNoise =
@@ -805,7 +917,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                           y1={chartGeom.padT}
                           x2={x}
                           y2={chartGeom.H - chartGeom.padB}
-                          stroke="hsla(210, 20%, 95%, 0.18)"
+                          stroke="var(--chart-crosshair)"
                         />
                       )}
                       {channelView === 'all_channels' ? (
@@ -814,11 +926,11 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                             key={c}
                             cx={x}
                             cy={chartGeom.yOfNoise(getFrameChannelNoise(f, c))}
-                            r={isSel ? 4.8 : 3.4}
+                            r={isSel ? 4.6 : 3.2}
                             fill={
-                              isSel ? CHANNEL_COLORS[c] : 'hsl(220, 20%, 6%)'
+                              isSel ? CHANNEL_VARS[c] : 'var(--chart-node-fill)'
                             }
-                            stroke={CHANNEL_COLORS[c]}
+                            stroke={CHANNEL_VARS[c]}
                             strokeWidth="1.8"
                           />
                         ))
@@ -827,26 +939,28 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                           <circle
                             cx={x}
                             cy={yd}
-                            r={isSel ? 5.5 : 4}
-                            fill="hsl(220, 20%, 6%)"
-                            stroke="hsl(152, 62%, 52%)"
-                            strokeWidth="2"
+                            r={isSel ? 5.2 : 3.8}
+                            fill="var(--chart-node-fill)"
+                            stroke="var(--optical-green)"
+                            strokeWidth="1.9"
                           />
                           <circle
                             cx={x}
                             cy={yn}
-                            r={isSel ? 6 : 4.2}
+                            r={isSel ? 5.8 : 4}
                             fill={
                               isSel
-                                ? 'hsl(37, 92%, 60%)'
-                                : 'hsl(220, 20%, 6%)'
+                                ? channelView === 'mean'
+                                  ? 'var(--accent-amber)'
+                                  : CHANNEL_VARS[channelView]
+                                : 'var(--chart-node-fill)'
                             }
                             stroke={
                               channelView === 'mean'
-                                ? 'hsl(37, 88%, 56%)'
-                                : CHANNEL_COLORS[channelView]
+                                ? 'var(--accent-amber)'
+                                : CHANNEL_VARS[channelView]
                             }
-                            strokeWidth="2.2"
+                            strokeWidth="2.1"
                           />
                         </>
                       )}
@@ -858,97 +972,123 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
           </div>
         </section>
 
-        {/* Right Sidebar: Selected ISO Frame 4-Channel Breakdown + G1 ADU Bell Curve */}
+        {/* Right Docked Frame Inspector */}
         {activeFrame && (
-          <aside className="xl:col-span-4 instrument-panel p-4 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--hairline-subtle)] pb-3">
-              <div>
-                <div className="text-xs text-[var(--text-muted)]">
-                  {t.noise.frameDetailHint}
-                </div>
-                <div className="text-sm font-semibold text-[var(--text-primary)] mono-num mt-0.5">
+          <aside className="inspector-dock border-t xl:border-t-0 xl:border-l border-[var(--hairline-default)]">
+            {/* Section 1: Selected ISO Frame & Stepper */}
+            <div className="inspector-section flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="section-eyebrow">{t.noise.frameDetailHint}</div>
+                <div className="text-[13px] font-semibold text-[var(--text-primary)] mono-num truncate mt-0.5">
                   {formatIsoText(activeFrame.iso)} · {activeFrame.filename}
                 </div>
               </div>
-              <span className="status-tag">
-                {activeFrame.metadata.bitsPerSample}-bit {activeFrame.metadata.cfaPattern}
-              </span>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="status-tag">
+                  {activeFrame.metadata.bitsPerSample}-bit{' '}
+                  {activeFrame.metadata.cfaPattern}
+                </span>
+                {frames.length > 1 && (
+                  <div className="inline-flex items-center gap-1">
+                    <button
+                      id="btn-prev-iso-frame"
+                      type="button"
+                      aria-label={t.noise.prevFrameAria}
+                      onClick={() => selectFrameByIdx(safeSelectedIdx - 1)}
+                      className="btn-instrument btn-icon-only"
+                    >
+                      <ChevronLeft size={13} />
+                    </button>
+                    <button
+                      id="btn-next-iso-frame"
+                      type="button"
+                      aria-label={t.noise.nextFrameAria}
+                      onClick={() => selectFrameByIdx(safeSelectedIdx + 1)}
+                      className="btn-instrument btn-icon-only"
+                    >
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Quality Alerts if Zero-Clipped, Light Leak, or Metadata/Thermal Notes */}
+            {/* Quality Alerts if Zero-Clipped, Light Leak, or Notes */}
             {localizedFrameNotes.length > 0 && (
-              <div
-                className={`p-2.5 rounded-lg text-xs space-y-1 ${
-                  activeFrame.isZeroClipped || activeFrame.suspectedLightLeak
-                    ? 'bg-[var(--alert-coral-soft)] border border-[hsla(3,82%,63%,0.3)] text-[hsl(3,88%,75%)]'
-                    : 'bg-[var(--bg-surface-1)] border border-[var(--hairline-default)] text-[var(--text-secondary)]'
-                }`}
-              >
-                <div className="font-semibold flex items-center gap-1.5">
-                  <AlertTriangle size={13} />
-                  <span>{t.noise.integrityAlertTitle}</span>
+              <div className="inspector-section">
+                <div
+                  className={`p-2.5 rounded-[var(--radius-sm)] text-xs space-y-1 ${
+                    activeFrame.isZeroClipped || activeFrame.suspectedLightLeak
+                      ? 'bg-[var(--alert-coral-soft)] border border-[var(--alert-coral-border)] text-[var(--alert-coral)]'
+                      : 'bg-[var(--bg-panel-subtle)] border border-[var(--hairline-default)] text-[var(--text-secondary)]'
+                  }`}
+                >
+                  <div className="font-semibold flex items-center gap-1.5">
+                    <AlertTriangle size={13} />
+                    <span>{t.noise.integrityAlertTitle}</span>
+                  </div>
+                  {localizedFrameNotes.map((note, idx) => (
+                    <p key={idx} className="m-0 leading-relaxed">
+                      {note}
+                    </p>
+                  ))}
                 </div>
-                {localizedFrameNotes.map((note, idx) => (
-                  <p key={idx} className="leading-relaxed">
-                    {note}
-                  </p>
-                ))}
               </div>
             )}
 
-            {/* R / G1 / G2 / B 4-Channel Cards */}
-            <div className="grid grid-cols-2 gap-2.5">
-              {activeFrame.channels.map((ch) => (
-                <div
-                  key={ch.channel}
-                  className="p-2.5 rounded-lg bg-[var(--bg-surface-1)] border border-[var(--hairline-subtle)] space-y-1 text-xs"
-                >
-                  <div className="flex items-center justify-between">
-                    <span
-                      className="mono-num font-semibold"
-                      style={{ color: CHANNEL_COLORS[ch.channel] }}
-                    >
-                      {t.noise.channelCardTitle(ch.channel)}
-                    </span>
-                    <span className="mono-num text-[var(--text-muted)]">
-                      DR {ch.engineeringDrEv.toFixed(2)} EV
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[var(--text-muted)]">σ_ADU</span>
-                    <span className="mono-num font-medium text-[var(--text-primary)]">
-                      {ch.readNoiseAdu.toFixed(3)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[var(--text-muted)]">
-                      {t.noise.deltaBlLabel}
-                    </span>
-                    <span className="mono-num text-[var(--text-secondary)]">
-                      {ch.blackLevelOffset >= 0 ? '+' : ''}
-                      {ch.blackLevelOffset.toFixed(2)} ADU
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[var(--text-muted)]">
-                      {t.noise.hotPixelsRejectedLabel}
-                    </span>
-                    <span className="mono-num text-[var(--text-secondary)]">
-                      {ch.hotPixelCount} ({ch.hotPixelPpm.toFixed(1)} ppm)
-                    </span>
-                  </div>
-                </div>
-              ))}
+            {/* Section 2: Compact 4-Channel Bayer Matrix */}
+            <div className="inspector-section">
+              <table className="channel-matrix-table mono-num">
+                <thead>
+                  <tr>
+                    <th>CFA</th>
+                    <th>σ_ADU</th>
+                    <th>DR (EV)</th>
+                    <th>{t.noise.deltaBlLabel}</th>
+                    <th>{t.noise.hotPixelsRejectedLabel}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeFrame.channels.map((ch) => (
+                    <tr key={ch.channel}>
+                      <td>
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--text-primary)]">
+                          <span
+                            className="w-2 h-2 rounded-full"
+                            style={{ backgroundColor: CHANNEL_VARS[ch.channel] }}
+                          />
+                          <span>{t.noise.channelCardTitle(ch.channel)}</span>
+                        </span>
+                      </td>
+                      <td className="font-medium text-[var(--text-primary)]">
+                        {ch.readNoiseAdu.toFixed(3)}
+                      </td>
+                      <td className="text-[var(--optical-green)]">
+                        {ch.engineeringDrEv.toFixed(2)}
+                      </td>
+                      <td>
+                        {ch.blackLevelOffset >= 0 ? '+' : ''}
+                        {ch.blackLevelOffset.toFixed(2)}
+                      </td>
+                      <td>
+                        {ch.hotPixelCount}{' '}
+                        <span className="text-[var(--text-muted)]">
+                          ({ch.hotPixelPpm.toFixed(0)}p)
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
-            {/* G1 Black-Level ADU Histogram Bell-Curve Micro-Plot */}
+            {/* Section 3: G1 Black-Level ADU Gaussian Histogram */}
             {activeFrame.g1HistogramWindow.length >= 1 && (
-              <div className="space-y-1.5 pt-1">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-[var(--text-secondary)] font-medium">
-                    {t.noise.g1HistTitle}
-                  </span>
-                  <span className="mono-num text-[var(--text-muted)]">
+              <div className="inspector-section space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="section-eyebrow">{t.noise.g1HistTitle}</span>
+                  <span className="status-tag">
                     {t.noise.nominalBlLabel(
                       activeFrame.channels[1].nominalBlackLevel.toFixed(0),
                     )}
@@ -968,20 +1108,20 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                   const blX = ((blAdu - minAdu + 0.5) / span) * 320;
 
                   return (
-                    <div className="p-2.5 rounded-lg bg-[var(--bg-loupe)] border border-[var(--hairline-subtle)]">
-                      <svg viewBox="0 0 320 96" className="w-full h-24">
+                    <div className="p-2.5 rounded-[var(--radius-sm)] bg-[#08090b] border border-[var(--hairline-default)]">
+                      <svg viewBox="0 0 320 92" className="w-full h-22 block">
                         {bins.map(([adu, cnt]) => {
                           const x = ((adu - minAdu) / span) * 320;
                           const bw = Math.max(1.2, (320 / span) * 0.82);
-                          const bh = (cnt / maxCnt) * 76;
+                          const bh = (cnt / maxCnt) * 72;
                           return (
                             <rect
                               key={adu}
                               x={x}
-                              y={80 - bh}
+                              y={76 - bh}
                               width={bw}
                               height={bh}
-                              fill="hsla(150, 65%, 48%, 0.78)"
+                              fill="hsla(152, 65%, 50%, 0.8)"
                             />
                           );
                         })}
@@ -990,28 +1130,28 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                             x1={blX}
                             y1={4}
                             x2={blX}
-                            y2={80}
-                            stroke="hsl(37, 92%, 60%)"
-                            strokeWidth="1.3"
+                            y2={76}
+                            stroke="hsl(36, 92%, 60%)"
+                            strokeWidth="1.2"
                             strokeDasharray="3 2"
                           />
                         )}
                         <text
                           x={4}
-                          y={93}
-                          fontSize="9"
+                          y={89}
+                          fontSize="8.5"
                           fontFamily="JetBrains Mono, monospace"
-                          fill="hsl(215, 10%, 52%)"
+                          fill="hsl(215, 10%, 56%)"
                         >
                           {minAdu} ADU
                         </text>
                         <text
                           x={316}
-                          y={93}
+                          y={89}
                           textAnchor="end"
-                          fontSize="9"
+                          fontSize="8.5"
                           fontFamily="JetBrains Mono, monospace"
-                          fill="hsl(215, 10%, 52%)"
+                          fill="hsl(215, 10%, 56%)"
                         >
                           {maxAdu} ADU
                         </text>
@@ -1025,10 +1165,10 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
         )}
       </div>
 
-      {/* Full Calibration Table */}
-      <section className="instrument-panel overflow-hidden">
-        <div className="panel-header">
-          <h3 className="panel-title">{t.noise.tableTitle}</h3>
+      {/* Lower Full-Width Calibration Data Ledger */}
+      <section className="bg-[var(--bg-panel)] flex-1">
+        <div className="px-4 py-2.5 border-b border-[var(--hairline-subtle)] flex items-center justify-between">
+          <h3 className="section-eyebrow m-0">{t.noise.tableTitle}</h3>
         </div>
         <div className="overflow-x-auto">
           <table className="calib-table mono-num">
@@ -1052,16 +1192,14 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             <tbody>
               {frames.map((f, idx) => {
                 const frameKey = `${f.filename}::${f.iso}`;
+                const isSelected = idx === safeSelectedIdx;
                 return (
                   <tr
                     key={frameKey}
                     onClick={() => setSelectedFrameKey(frameKey)}
-                    className="cursor-pointer"
-                    style={
-                      idx === safeSelectedIdx
-                        ? { background: 'hsla(37, 88%, 56%, 0.08)' }
-                        : undefined
-                    }
+                    className={`cursor-pointer ${
+                      isSelected ? 'is-selected-row' : ''
+                    }`}
                   >
                     <td className="font-semibold text-[var(--text-primary)]">
                       {formatIsoText(f.iso)}

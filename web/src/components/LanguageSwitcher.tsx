@@ -35,7 +35,7 @@ export const LanguageSwitcher: React.FC = () => {
   }, [open]);
 
   return (
-    <div ref={rootRef} className="lang-switcher">
+    <div ref={rootRef} className="popover-anchor">
       <button
         id="btn-language-switcher"
         type="button"
@@ -43,12 +43,12 @@ export const LanguageSwitcher: React.FC = () => {
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="btn-instrument lang-switcher-trigger"
+        className="btn-instrument"
       >
-        <Globe size={14} className="text-[var(--accent-amber)]" />
+        <Globe size={13} className="text-[var(--text-secondary)]" />
         <span>{activeOpt.shortLabel}</span>
         <ChevronDown
-          size={12}
+          size={11}
           className={`text-[var(--text-muted)] transition-transform duration-150 ${
             open ? 'rotate-180' : ''
           }`}
@@ -60,7 +60,7 @@ export const LanguageSwitcher: React.FC = () => {
           id="menu-language-options"
           role="listbox"
           aria-label={t.langMenuAriaLabel}
-          className="lang-switcher-menu"
+          className="popover-menu"
         >
           {LOCALE_OPTIONS.map((opt) => {
             const selected = opt.code === locale;
@@ -75,9 +75,7 @@ export const LanguageSwitcher: React.FC = () => {
                   setLocale(opt.code);
                   setOpen(false);
                 }}
-                className={`lang-switcher-option ${
-                  selected ? 'is-selected' : ''
-                }`}
+                className={`popover-option ${selected ? 'is-selected' : ''}`}
               >
                 <span>{opt.nativeLabel}</span>
                 {selected && (

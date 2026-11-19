@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Activity,
   AlertCircle,
   Aperture,
+  ChevronDown,
   Cpu,
   FlaskConical,
   Loader2,
+  Moon,
+  Sparkles,
+  Stars,
+  Sun,
+  Target,
   X,
 } from 'lucide-react';
 import { DropZone } from './components/DropZone';
@@ -25,12 +30,27 @@ import type {
 } from './types/collima';
 
 type WorkbenchMode = 'tilt' | 'noise';
+type StudioTheme = 'dark' | 'light';
 
 const PATCH_SIZE = 256;
+const THEME_STORAGE_KEY = 'collima.theme';
+
+function detectInitialTheme(): StudioTheme {
+  if (typeof window === 'undefined') return 'dark';
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {
+    // Ignore storage access errors
+  }
+  return 'dark';
+}
 
 export const App: React.FC = () => {
   const { locale, t } = useI18n();
   const [mode, setMode] = useState<WorkbenchMode>('tilt');
+  const [theme, setTheme] = useState<StudioTheme>(detectInitialTheme);
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [tiltSession, setTiltSession] = useState<ActiveTiltSessionData | null>(
     null,
   );
@@ -47,12 +67,69 @@ export const App: React.FC = () => {
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const reqIdRef = useRef<number>(1);
   const activeTiltSessionReqRef = useRef<number>(0);
   const activeTiltRenderReqRef = useRef<number>(0);
   const activeTiltStationReqRef = useRef<number>(0);
   const activeNoiseReqRef = useRef<number>(0);
+
+  // Sync studio theme attribute
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [theme]);
+
+  // Close preset popover on outside click / Escape
+  useEffect(() => {
+    if (!presetMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (
+        presetMenuRef.current &&
+        !presetMenuRef.current.contains(e.target as Node)
+      ) {
+        setPresetMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPresetMenuOpen(false);
+    };
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [presetMenuOpen]);
+
+  // Global 1 / 2 workspace mode shortcuts
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === '1') {
+        setMode('tilt');
+      } else if (e.key === '2') {
+        setMode('noise');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const sendWorkerRequest = useCallback((req: WorkerRequest) => {
     setErrorMsg(null);
@@ -249,6 +326,7 @@ export const App: React.FC = () => {
   };
 
   const handleLoadTiltPreset = (preset: SyntheticPresetId) => {
+    setPresetMenuOpen(false);
     const requestId = ++reqIdRef.current;
     activeTiltSessionReqRef.current = requestId;
     activeTiltRenderReqRef.current = requestId;
@@ -276,6 +354,7 @@ export const App: React.FC = () => {
   };
 
   const handleLoadNoisePreset = () => {
+    setPresetMenuOpen(false);
     const requestId = ++reqIdRef.current;
     activeNoiseReqRef.current = requestId;
     sendWorkerRequest({
@@ -347,52 +426,173 @@ export const App: React.FC = () => {
   };
 
   const isBusy = progress !== null;
+  const hasActiveView =
+    mode === 'tilt' ? tiltSession !== null : noiseSeries !== null;
   const activeMeta =
     mode === 'tilt'
       ? tiltSession?.metadata
       : noiseSeries?.frames[0]?.metadata;
 
+  const progressPct =
+    progress && progress.total > 0
+      ? Math.min(100, Math.round((progress.completed / progress.total) * 100))
+      : 35;
+
+  const isLockedDesktopTilt =
+    mode === 'tilt' && tiltSession !== null && errorMsg === null;
+
   return (
-    <div className="workbench-shell">
-      {/* Sticky Top Instrument Bar */}
+    <div
+      className={`workbench-shell ${
+        isLockedDesktopTilt ? 'is-locked-viewport' : ''
+      }`}
+    >
+      {/* Top 44px Precision Command Bar */}
       <header className="topbar">
         <div className="topbar-inner">
-          <div className="brand-cluster">
-            <div className="aperture-mark" aria-hidden="true">
-              <Aperture size={18} />
-            </div>
-            <div>
+          {/* Left: Brand + Mode Tabs */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="brand-cluster">
+              <div className="aperture-mark" aria-hidden="true">
+                <Aperture size={15} strokeWidth={1.9} />
+              </div>
               <h1 className="brand-title">
                 <span>collima</span>
-                <span className="brand-subtitle">{t.brandSubtitle}</span>
+                <span className="hidden md:inline text-xs font-normal text-[var(--text-muted)] tracking-normal">
+                  {t.brandSubtitle}
+                </span>
               </h1>
             </div>
+
+            <span className="brand-divider hidden sm:block" />
+
+            <nav aria-label={t.navAriaLabel} className="segmented-control">
+              <button
+                id="tab-tilt-inspector"
+                type="button"
+                onClick={() => setMode('tilt')}
+                className={`segmented-btn ${mode === 'tilt' ? 'is-active' : ''}`}
+              >
+                <Aperture size={13} className="mode-indicator" />
+                <span>{t.tabTiltLabel}</span>
+                <span className="kbd-hint hidden sm:inline-flex">1</span>
+              </button>
+              <button
+                id="tab-sensor-noise-lab"
+                type="button"
+                onClick={() => setMode('noise')}
+                className={`segmented-btn ${mode === 'noise' ? 'is-active' : ''}`}
+              >
+                <FlaskConical size={13} className="mode-indicator" />
+                <span>{t.tabNoiseLabel}</span>
+                <span className="kbd-hint hidden sm:inline-flex">2</span>
+              </button>
+            </nav>
           </div>
 
-          {/* Primary Workbench Mode Switcher */}
-          <nav aria-label={t.navAriaLabel} className="segmented-control">
-            <button
-              id="tab-tilt-inspector"
-              type="button"
-              onClick={() => setMode('tilt')}
-              className={`segmented-btn ${mode === 'tilt' ? 'is-active' : ''}`}
-            >
-              <Aperture size={15} className="mode-indicator" />
-              <span>{t.tabTiltLabel}</span>
-            </button>
-            <button
-              id="tab-sensor-noise-lab"
-              type="button"
-              onClick={() => setMode('noise')}
-              className={`segmented-btn ${mode === 'noise' ? 'is-active' : ''}`}
-            >
-              <FlaskConical size={15} className="mode-indicator" />
-              <span>{t.tabNoiseLabel}</span>
-            </button>
-          </nav>
+          {/* Center: Active Camera / Lens Context Breadcrumb */}
+          {activeMeta && (
+            <div className="hidden xl:flex items-center gap-2 min-w-0 px-2.5 py-1 rounded-[var(--radius-sm)] bg-[var(--bg-elevated)] border border-[var(--hairline-subtle)] text-xs truncate max-w-md">
+              <span className="font-medium text-[var(--text-primary)] truncate">
+                {activeMeta.cameraLabel}
+              </span>
+              {activeMeta.lensModel && (
+                <>
+                  <span className="text-[var(--text-muted)]">/</span>
+                  <span className="text-[var(--text-secondary)] truncate">
+                    {activeMeta.lensModel}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
 
-          {/* Right Quick Actions */}
-          <div className="flex items-center gap-2">
+          {/* Right: Contextual Actions, Presets, Theme & Locale */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {hasActiveView && (
+              <div ref={presetMenuRef} className="popover-anchor">
+                <button
+                  id="btn-presets-menu"
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => setPresetMenuOpen((v) => !v)}
+                  className="btn-instrument hidden sm:inline-flex"
+                >
+                  <Sparkles size={12} className="text-[var(--accent-amber)]" />
+                  <span>{t.presetsMenuLabel}</span>
+                  <ChevronDown size={11} className="text-[var(--text-muted)]" />
+                </button>
+
+                {presetMenuOpen && (
+                  <div className="popover-menu" style={{ minWidth: '220px' }}>
+                    {mode === 'tilt' ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => handleLoadTiltPreset('tilt_chart')}
+                          className="popover-option"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Target
+                              size={13}
+                              className="text-[var(--accent-amber)]"
+                            />
+                            <span>{t.dropzone.btnSynthTiltChart}</span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() =>
+                            handleLoadTiltPreset('astro_starfield')
+                          }
+                          className="popover-option"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Stars
+                              size={13}
+                              className="text-[var(--signal-blue)]"
+                            />
+                            <span>{t.dropzone.btnSynthAstro}</span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => handleLoadTiltPreset('flat_reference')}
+                          className="popover-option"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Sparkles
+                              size={13}
+                              className="text-[var(--optical-green)]"
+                            />
+                            <span>{t.dropzone.btnSynthFlatRef}</span>
+                          </span>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={handleLoadNoisePreset}
+                        className="popover-option"
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <Sparkles
+                            size={13}
+                            className="text-[var(--accent-amber)]"
+                          />
+                          <span>{t.dropzone.btnSynthIsoSeries}</span>
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {mode === 'tilt' && tiltSession && (
               <>
                 <button
@@ -402,7 +602,8 @@ export const App: React.FC = () => {
                   onClick={handleCloseTiltSession}
                   className="btn-instrument"
                 >
-                  {t.btnBackToBench}
+                  <X size={12} className="text-[var(--text-muted)]" />
+                  <span className="hidden sm:inline">{t.btnBackToBench}</span>
                 </button>
                 <DropZone
                   mode="tilt"
@@ -412,6 +613,7 @@ export const App: React.FC = () => {
                 />
               </>
             )}
+
             {mode === 'noise' && noiseSeries && (
               <DropZone
                 mode="noise"
@@ -420,143 +622,66 @@ export const App: React.FC = () => {
                 onFilesAccepted={handleFilesAccepted}
               />
             )}
+
+            <button
+              id="btn-theme-toggle"
+              type="button"
+              aria-label={
+                theme === 'dark' ? t.themeDarkLabel : t.themeLightLabel
+              }
+              title={theme === 'dark' ? t.themeDarkLabel : t.themeLightLabel}
+              onClick={() =>
+                setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+              }
+              className="btn-instrument btn-icon-only"
+            >
+              {theme === 'dark' ? (
+                <Sun size={13} className="text-[var(--text-secondary)]" />
+              ) : (
+                <Moon size={13} className="text-[var(--text-secondary)]" />
+              )}
+            </button>
+
             <LanguageSwitcher />
           </div>
         </div>
+
+        {/* Non-blocking 2px Topbar Progress Hairline */}
+        {progress && (
+          <div className="topbar-progress-line" aria-hidden="true">
+            <div
+              className="topbar-progress-fill"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        )}
       </header>
-
-      {/* EXIF, Sensor Geometry & Dual-Codec Telemetry Strip */}
-      {activeMeta && (
-        <div
-          className="telemetry-strip"
-          role="region"
-          aria-label={t.telemetryRegionAria}
-        >
-          <div className="telemetry-strip-inner mono-num">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="telemetry-kv font-sans">
-                <strong>{activeMeta.cameraLabel}</strong>
-              </span>
-              {activeMeta.lensModel && (
-                <>
-                  <span className="telemetry-divider" />
-                  <span className="telemetry-kv font-sans">
-                    <span>{t.telemetryLens}</span>
-                    <strong>{activeMeta.lensModel}</strong>
-                  </span>
-                </>
-              )}
-              <span className="telemetry-divider" />
-              <span className="telemetry-kv">
-                <strong>
-                  {[
-                    activeMeta.focalLengthMm
-                      ? `${activeMeta.focalLengthMm.toFixed(0)}mm`
-                      : null,
-                    activeMeta.fNumber ? `f/${activeMeta.fNumber.toFixed(1)}` : null,
-                    activeMeta.shutterDisplay,
-                    activeMeta.iso ? `ISO ${activeMeta.iso}` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ') || t.telemetryManualExposure}
-                </strong>
-              </span>
-              <span className="telemetry-divider" />
-              <span className="telemetry-kv">
-                <span>{t.telemetryActiveArea}</span>
-                <strong>
-                  {activeMeta.activeWidth}×{activeMeta.activeHeight}
-                </strong>
-                <span>
-                  ({activeMeta.bitsPerSample}-bit {activeMeta.cfaPattern})
-                </span>
-              </span>
-              <span className="telemetry-divider" />
-              <span className="telemetry-kv">
-                <span>BL / WL</span>
-                <strong>
-                  {activeMeta.blackLevels[1].toFixed(0)} /{' '}
-                  {activeMeta.whiteLevels[1].toFixed(0)} ADU
-                </strong>
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2.5">
-              <span className="status-tag">
-                <Cpu size={11} />
-                <span>
-                  {activeMeta.formatName} · {activeMeta.compressionName} (
-                  {activeMeta.decoderEngine})
-                </span>
-              </span>
-              <span className="status-tag status-tag--pass">
-                <Activity size={11} />
-                <span>
-                  {t.telemetryDecodeTime(activeMeta.decodeMs.toFixed(1))}
-                </span>
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Non-blocking Worker Progress Banner */}
-      {progress && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="bg-[var(--bg-surface-2)] border-b border-[var(--hairline-default)] px-4 py-2"
-        >
-          <div className="max-w-[1680px] mx-auto flex items-center justify-between gap-4 text-xs">
-            <div className="flex items-center gap-2 text-[var(--accent-amber)]">
-              <Loader2 size={14} className="animate-spin" />
-              <span>
-                {formatWorkerProgress(
-                  progress.stage,
-                  progress.progressKey,
-                  progress.progressParams,
-                  locale,
-                )}
-              </span>
-            </div>
-            {progress.total > 0 && (
-              <span className="mono-num text-[var(--text-secondary)]">
-                {Math.min(100, Math.round((progress.completed / progress.total) * 100))}%
-              </span>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Error Alert Banner */}
       {errorMsg !== null && (
-        <div className="max-w-5xl mx-auto w-full px-4 pt-4">
+        <div className="px-4 py-2 bg-[var(--alert-coral-soft)] border-b border-[var(--alert-coral-border)] flex items-center justify-between gap-3 text-xs text-[var(--alert-coral)] shrink-0">
           <div
             role="alert"
-            className="p-3.5 rounded-lg bg-[var(--alert-coral-soft)] border border-[hsla(3,82%,63%,0.35)] flex items-start justify-between gap-3 text-xs text-[hsl(3,88%,78%)]"
+            className="flex items-center gap-2 min-w-0"
           >
-            <div className="flex items-start gap-2.5">
-              <AlertCircle size={16} className="shrink-0 mt-0.5" />
-              <div className="space-y-0.5">
-                <div className="font-semibold">{t.errorTitle}</div>
-                <div>{errorMsg || t.workerRuntimeError}</div>
-              </div>
-            </div>
-            <button
-              id="btn-dismiss-error"
-              type="button"
-              onClick={() => setErrorMsg(null)}
-              className="text-[hsl(3,88%,78%)] hover:text-white"
-              aria-label={t.errorDismissAria}
-            >
-              <X size={15} />
-            </button>
+            <AlertCircle size={14} className="shrink-0" />
+            <span className="font-semibold shrink-0">{t.errorTitle}:</span>
+            <span className="truncate">{errorMsg || t.workerRuntimeError}</span>
           </div>
+          <button
+            id="btn-dismiss-error"
+            type="button"
+            onClick={() => setErrorMsg(null)}
+            className="btn-instrument btn-ghost btn-icon-only shrink-0"
+            aria-label={t.errorDismissAria}
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
 
-      {/* Main Workbench Viewport */}
-      <main className="flex-1 flex flex-col">
+      {/* Main Docked Workbench Viewport */}
+      <main className="flex-1 min-h-0 flex flex-col">
         {mode === 'tilt' ? (
           tiltSession ? (
             <TiltInspector
@@ -589,8 +714,78 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="border-t border-[var(--hairline-subtle)] py-3 px-4 text-center text-[11px] text-[var(--text-muted)]">
-        {t.footerNote}
+      {/* Bottom 28px Studio Telemetry & Engine Status Bar */}
+      <footer
+        className="statusbar mono-num"
+        role="region"
+        aria-label={t.telemetryRegionAria}
+      >
+        <div className="flex items-center gap-3 shrink-0">
+          {progress ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="inline-flex items-center gap-1.5 text-[var(--accent-amber)] font-sans"
+            >
+              <Loader2 size={11} className="animate-spin" />
+              <span>
+                {formatWorkerProgress(
+                  progress.stage,
+                  progress.progressKey,
+                  progress.progressParams,
+                  locale,
+                )}
+              </span>
+              {progress.total > 0 && (
+                <span className="mono-num">({progressPct}%)</span>
+              )}
+            </div>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 font-sans text-[var(--text-secondary)]">
+              <span className="status-dot" />
+              <span>{t.statusReady}</span>
+            </span>
+          )}
+
+          <span className="text-[var(--hairline-strong)]">·</span>
+
+          {activeMeta ? (
+            <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
+              <Cpu size={11} className="text-[var(--text-muted)]" />
+              <span>
+                {activeMeta.formatName} · {activeMeta.compressionName} (
+                {activeMeta.decoderEngine})
+              </span>
+              <span className="text-[var(--optical-green)]">
+                · {t.telemetryDecodeTime(activeMeta.decodeMs.toFixed(1))}
+              </span>
+            </span>
+          ) : (
+            <span className="font-sans">{t.footerNote}</span>
+          )}
+        </div>
+
+        {activeMeta && (
+          <div className="flex items-center gap-3 shrink-0 text-[var(--text-secondary)]">
+            <span>
+              <span className="font-sans text-[var(--text-muted)] mr-1">
+                {t.telemetryActiveArea}
+              </span>
+              <strong className="font-medium text-[var(--text-primary)]">
+                {activeMeta.activeWidth}×{activeMeta.activeHeight}
+              </strong>{' '}
+              ({activeMeta.bitsPerSample}-bit {activeMeta.cfaPattern})
+            </span>
+            <span className="text-[var(--hairline-strong)]">·</span>
+            <span>
+              <span className="text-[var(--text-muted)] mr-1">BL/WL</span>
+              <strong className="font-medium text-[var(--text-primary)]">
+                {activeMeta.blackLevels[1].toFixed(0)} /{' '}
+                {activeMeta.whiteLevels[1].toFixed(0)} ADU
+              </strong>
+            </span>
+          </div>
+        )}
       </footer>
     </div>
   );

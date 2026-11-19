@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import {
   Aperture,
+  ChevronRight,
   FileUp,
   Layers,
   ShieldCheck,
@@ -93,7 +94,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
 
   if (compact) {
     return (
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="inline-flex items-center">
         <input
           id={`raw-file-input-compact-${mode}`}
           ref={inputRef}
@@ -111,9 +112,9 @@ export const DropZone: React.FC<DropZoneProps> = ({
           type="button"
           disabled={disabled}
           onClick={() => inputRef.current?.click()}
-          className="btn-instrument btn-primary-amber"
+          className="btn-instrument btn-primary-cta"
         >
-          <FileUp size={15} />
+          <FileUp size={13} />
           <span>
             {mode === 'tilt'
               ? t.dropzone.compactTiltUpload
@@ -124,6 +125,9 @@ export const DropZone: React.FC<DropZoneProps> = ({
     );
   }
 
+  const guideItems =
+    mode === 'tilt' ? t.dropzone.guideTiltItems : t.dropzone.guideNoiseItems;
+
   return (
     <section
       aria-label={
@@ -131,7 +135,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
           ? t.dropzone.sectionAriaTilt
           : t.dropzone.sectionAriaNoise
       }
-      className="max-w-5xl mx-auto w-full py-6 px-4"
+      className="flex-1 flex flex-col justify-center max-w-[1000px] mx-auto w-full px-4 py-6 sm:py-10"
     >
       <input
         id={`raw-file-input-${mode}`}
@@ -146,53 +150,242 @@ export const DropZone: React.FC<DropZoneProps> = ({
         }}
       />
 
-      <div
-        id={`dropzone-area-${mode}`}
-        role="button"
-        tabIndex={0}
-        onClick={() => !disabled && inputRef.current?.click()}
-        onKeyDown={(e) => {
-          if ((e.key === 'Enter' || e.key === ' ') && !disabled) {
+      <div className="launchpad-frame grid grid-cols-1 lg:grid-cols-12">
+        {/* Left Column: Primary RAW Drop Target */}
+        <div
+          id={`dropzone-area-${mode}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => !disabled && inputRef.current?.click()}
+          onKeyDown={(e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && !disabled) {
+              e.preventDefault();
+              inputRef.current?.click();
+            }
+          }}
+          onDragOver={(e) => {
             e.preventDefault();
-            inputRef.current?.click();
-          }
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (!disabled) setIsDragging(true);
-        }}
-        onDragLeave={(e) => {
-          e.preventDefault();
-          setIsDragging(false);
-        }}
-        onDrop={handleDrop}
-        className={`dropzone-surface ${isDragging ? 'is-dragging' : ''}`}
-      >
-        <div className="flex flex-col items-center text-center max-w-2xl mx-auto gap-4">
-          <div className="w-12 h-12 rounded-xl bg-[var(--bg-surface-2)] border border-[var(--hairline-strong)] grid place-items-center text-[var(--accent-amber)]">
-            {mode === 'tilt' ? <Aperture size={24} /> : <Layers size={24} />}
+            if (!disabled) setIsDragging(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+          }}
+          onDrop={handleDrop}
+          className={`lg:col-span-7 dropzone-target ${
+            isDragging ? 'is-dragging' : ''
+          }`}
+        >
+          <div className="space-y-5 relative z-10">
+            {/* Precision Sensor Registration Icon */}
+            <div className="w-10 h-10 rounded-md bg-[var(--bg-elevated)] border border-[var(--hairline-strong)] grid place-items-center text-[var(--text-primary)]">
+              {mode === 'tilt' ? (
+                <Aperture size={19} strokeWidth={1.75} />
+              ) : (
+                <Layers size={19} strokeWidth={1.75} />
+              )}
+            </div>
+
+            <div className="space-y-2 max-w-lg">
+              <h2 className="text-base font-semibold tracking-tight text-[var(--text-primary)]">
+                {mode === 'tilt' ? t.dropzone.titleTilt : t.dropzone.titleNoise}
+              </h2>
+              <p className="text-[12.5px] text-[var(--text-secondary)] leading-relaxed">
+                {mode === 'tilt' ? t.dropzone.descTilt : t.dropzone.descNoise}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                id={`btn-select-files-${mode}`}
+                type="button"
+                disabled={disabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!disabled) inputRef.current?.click();
+                }}
+                className="btn-instrument btn-primary-cta"
+                style={{ height: '32px', padding: '0 0.9rem' }}
+              >
+                <FileUp size={14} />
+                <span>
+                  {mode === 'tilt'
+                    ? t.dropzone.btnSelectFilesTilt
+                    : t.dropzone.btnSelectFilesNoise}
+                </span>
+              </button>
+              <span className="text-xs text-[var(--text-muted)]">
+                {t.dropzone.dragHint}
+              </span>
+            </div>
           </div>
 
-          <div className="space-y-1.5">
-            <h2 className="text-lg font-semibold tracking-tight text-[var(--text-primary)]">
-              {mode === 'tilt' ? t.dropzone.titleTilt : t.dropzone.titleNoise}
-            </h2>
-            <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-              {mode === 'tilt' ? t.dropzone.descTilt : t.dropzone.descNoise}
-            </p>
+          {/* Supported Formats & Local WASM Guarantee */}
+          <div className="space-y-3 pt-8 relative z-10">
+            <div className="space-y-1.5">
+              <div className="section-eyebrow">
+                {t.dropzone.supportedFormatsLabel}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <span className="status-tag">{t.dropzone.tagSony}</span>
+                <span className="status-tag">{t.dropzone.tagNikon}</span>
+                <span className="status-tag">{t.dropzone.tagCanon}</span>
+                <span className="status-tag">{t.dropzone.tagDng}</span>
+                <span className="status-tag">{t.dropzone.tagOthers}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 text-[11.5px] text-[var(--optical-green)] pt-1">
+              <ShieldCheck size={13} className="shrink-0" />
+              <span>{t.dropzone.privacyBadge}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Synthetic Calibration Presets + Shooting Protocol */}
+        <div className="lg:col-span-5 bg-[var(--bg-panel-subtle)] border-t lg:border-t-0 lg:border-l border-[var(--hairline-default)] flex flex-col justify-between">
+          {/* Synthetic 14-bit Calibration Presets */}
+          <div className="p-5 space-y-3">
+            <div className="space-y-1">
+              <div className="section-eyebrow">{t.dropzone.synthTitle}</div>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                {t.dropzone.synthDesc}
+              </p>
+            </div>
+
+            <div className="space-y-2 pt-0.5">
+              {mode === 'tilt' && onLoadTiltPreset && (
+                <>
+                  <button
+                    id="btn-synth-tilt-chart"
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onLoadTiltPreset('tilt_chart')}
+                    className="preset-row-btn group"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <Target
+                        size={15}
+                        className="text-[var(--accent-amber)] shrink-0 mt-0.5"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-[var(--text-primary)] truncate">
+                          {t.dropzone.btnSynthTiltChart}
+                        </div>
+                        <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                          {t.dropzone.synthTiltChartMeta}
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight
+                      size={14}
+                      className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform group-hover:translate-x-0.5"
+                    />
+                  </button>
+
+                  <button
+                    id="btn-synth-astro"
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onLoadTiltPreset('astro_starfield')}
+                    className="preset-row-btn group"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <Stars
+                        size={15}
+                        className="text-[var(--signal-blue)] shrink-0 mt-0.5"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-[var(--text-primary)] truncate">
+                          {t.dropzone.btnSynthAstro}
+                        </div>
+                        <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                          {t.dropzone.synthAstroMeta}
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight
+                      size={14}
+                      className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform group-hover:translate-x-0.5"
+                    />
+                  </button>
+
+                  <button
+                    id="btn-synth-flat-ref"
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onLoadTiltPreset('flat_reference')}
+                    className="preset-row-btn group"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <Sparkles
+                        size={15}
+                        className="text-[var(--optical-green)] shrink-0 mt-0.5"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-[var(--text-primary)] truncate">
+                          {t.dropzone.btnSynthFlatRef}
+                        </div>
+                        <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                          {t.dropzone.synthFlatRefMeta}
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight
+                      size={14}
+                      className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform group-hover:translate-x-0.5"
+                    />
+                  </button>
+                </>
+              )}
+
+              {mode === 'noise' && onLoadNoisePreset && (
+                <button
+                  id="btn-synth-iso-series"
+                  type="button"
+                  disabled={disabled}
+                  onClick={onLoadNoisePreset}
+                  className="preset-row-btn group"
+                >
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <Sparkles
+                      size={15}
+                      className="text-[var(--accent-amber)] shrink-0 mt-0.5"
+                    />
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-[var(--text-primary)] truncate">
+                        {t.dropzone.btnSynthIsoSeries}
+                      </div>
+                      <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                        {t.dropzone.synthIsoSeriesMeta}
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight
+                    size={14}
+                    className="text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform group-hover:translate-x-0.5"
+                  />
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-            <span className="status-tag">{t.dropzone.tagSony}</span>
-            <span className="status-tag">{t.dropzone.tagNikon}</span>
-            <span className="status-tag">{t.dropzone.tagCanon}</span>
-            <span className="status-tag">{t.dropzone.tagDng}</span>
-            <span className="status-tag">{t.dropzone.tagOthers}</span>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs text-[var(--optical-green)] pt-1">
-            <ShieldCheck size={14} />
-            <span>{t.dropzone.privacyBadge}</span>
+          {/* Concise Field Capture Protocol */}
+          <div className="p-5 border-t border-[var(--hairline-subtle)] space-y-2.5">
+            <div className="section-eyebrow">{t.dropzone.guideTitle}</div>
+            <ol className="space-y-2 m-0 p-0 list-none">
+              {guideItems.map((item, idx) => (
+                <li
+                  key={idx}
+                  className="flex items-start gap-2.5 text-[11.5px] text-[var(--text-secondary)] leading-snug"
+                >
+                  <span className="mono-num text-[10.5px] text-[var(--text-muted)] pt-0.5 shrink-0">
+                    0{idx + 1}
+                  </span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
       </div>
@@ -200,75 +393,11 @@ export const DropZone: React.FC<DropZoneProps> = ({
       {invalidFileName !== null && (
         <div
           role="alert"
-          className="mt-3 px-4 py-2.5 rounded-lg bg-[var(--alert-coral-soft)] border border-[hsla(3,82%,63%,0.3)] text-xs text-[hsl(3,88%,75%)]"
+          className="mt-3 px-3.5 py-2.5 rounded-md bg-[var(--alert-coral-soft)] border border-[var(--alert-coral-border)] text-xs text-[var(--alert-coral)]"
         >
           {t.dropzone.unsupportedFormat(invalidFileName)}
         </div>
       )}
-
-      {/* Built-in Synthetic 14-bit DNG Calibration Suite */}
-      <div className="mt-5 instrument-panel p-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-0.5">
-            <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              {t.dropzone.synthTitle}
-            </div>
-            <p className="text-xs text-[var(--text-secondary)]">
-              {t.dropzone.synthDesc}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {mode === 'tilt' && onLoadTiltPreset && (
-              <>
-                <button
-                  id="btn-synth-tilt-chart"
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => onLoadTiltPreset('tilt_chart')}
-                  className="btn-instrument"
-                >
-                  <Target size={14} className="text-[var(--accent-amber)]" />
-                  <span>{t.dropzone.btnSynthTiltChart}</span>
-                </button>
-                <button
-                  id="btn-synth-astro"
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => onLoadTiltPreset('astro_starfield')}
-                  className="btn-instrument"
-                >
-                  <Stars size={14} className="text-[var(--channel-b)]" />
-                  <span>{t.dropzone.btnSynthAstro}</span>
-                </button>
-                <button
-                  id="btn-synth-flat-ref"
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => onLoadTiltPreset('flat_reference')}
-                  className="btn-instrument"
-                >
-                  <Sparkles size={14} className="text-[var(--optical-green)]" />
-                  <span>{t.dropzone.btnSynthFlatRef}</span>
-                </button>
-              </>
-            )}
-
-            {mode === 'noise' && onLoadNoisePreset && (
-              <button
-                id="btn-synth-iso-series"
-                type="button"
-                disabled={disabled}
-                onClick={onLoadNoisePreset}
-                className="btn-instrument btn-primary-amber"
-              >
-                <Sparkles size={14} />
-                <span>{t.dropzone.btnSynthIsoSeries}</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
     </section>
   );
 };

@@ -1,13 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Compass,
   Crosshair,
   Eye,
-  Flame,
   Move,
   RotateCcw,
   Sliders,
-  ZoomIn,
 } from 'lucide-react';
 import type {
   ActiveTiltSessionData,
@@ -36,7 +33,14 @@ const GRADE_BADGE_CLASS: Record<OpticalGrade, string> = {
   insufficient_texture: 'status-tag status-tag--warn',
 };
 
-/** Map normalized relative sharpness [0..1.15] to calibrated thermal RGBA (obsidian -> teal -> optical green -> amber -> ivory). */
+const CORNER_INDEX_MAP: Record<'tl' | 'tr' | 'bl' | 'br', number> = {
+  tl: 0,
+  tr: 2,
+  bl: 6,
+  br: 8,
+};
+
+/** Map normalized relative sharpness [0..1] to calibrated thermal RGB. */
 function heatmapColor(rel: number): [number, number, number] {
   const safeRel = Number.isFinite(rel) ? rel : 0;
   const t = Math.max(0, Math.min(1, safeRel));
@@ -77,6 +81,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
   const [showReticle, setShowReticle] = useState<boolean>(true);
   const [dragMode, setDragMode] = useState<'sync_pan' | 'relocate_roi'>('sync_pan');
   const [panPx, setPanPx] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [selectedStationIdx, setSelectedStationIdx] = useState<number>(4);
   const [evDraft, setEvDraft] = useState<number | null>(null);
   const displayEv = evDraft ?? session.evBoost;
 
@@ -149,18 +154,18 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         const cy = Math.floor(ph / 2) + 0.5;
         ctx.strokeStyle =
           idx === 4
-            ? 'hsla(37, 92%, 60%, 0.55)'
-            : 'hsla(210, 20%, 92%, 0.28)';
+            ? 'hsla(36, 92%, 60%, 0.6)'
+            : 'hsla(210, 20%, 94%, 0.28)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(cx - 18, cy);
+        ctx.moveTo(cx - 16, cy);
         ctx.lineTo(cx - 4, cy);
         ctx.moveTo(cx + 4, cy);
-        ctx.lineTo(cx + 18, cy);
-        ctx.moveTo(cx, cy - 18);
+        ctx.lineTo(cx + 16, cy);
+        ctx.moveTo(cx, cy - 16);
         ctx.lineTo(cx, cy - 4);
         ctx.moveTo(cx, cy + 4);
-        ctx.lineTo(cx, cy + 18);
+        ctx.lineTo(cx, cy + 16);
         ctx.stroke();
       }
     });
@@ -194,7 +199,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
       Number.isFinite(session.sharpness.centerSharpness) &&
       session.sharpness.centerSharpness > 1e-6;
 
-    // 2. Smooth 5x5 interpolated contour heatmap overlay (ignoring low-texture sky / clipped regions)
+    // 2. Smooth 5x5 interpolated contour heatmap overlay
     if (showHeatmap && centerValid && session.sharpness.grid5x5.length === 25) {
       const validNodes: { r: number; c: number; val: number }[] = [];
       for (let i = 0; i < 25; i++) {
@@ -239,7 +244,6 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           }
 
           const sampleGrid = (u: number, v: number): number => {
-            // Grid centers lie at (c + 0.5) / 5
             const gx = Math.max(0, Math.min(4, u * 5 - 0.5));
             const gy = Math.max(0, Math.min(4, v * 5 - 0.5));
             const x0 = Math.floor(gx);
@@ -271,7 +275,6 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
             for (let x = 0; x < hmW; x++) {
               const idx = y * hmW + x;
               const val = field[idx];
-              // Quantize slightly for crisp optical iso-contour legibility + contour edge highlight
               const right = field[y * hmW + Math.min(hmW - 1, x + 1)];
               const down = field[Math.min(hmH - 1, y + 1) * hmW + x];
               let isContourLine = false;
@@ -290,13 +293,13 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 hmData.data[p] = 248;
                 hmData.data[p + 1] = 250;
                 hmData.data[p + 2] = 252;
-                hmData.data[p + 3] = 195;
+                hmData.data[p + 3] = 190;
               } else {
                 const [r, g, b] = heatmapColor(val);
                 hmData.data[p] = r;
                 hmData.data[p + 1] = g;
                 hmData.data[p + 2] = b;
-                hmData.data[p + 3] = 112;
+                hmData.data[p + 3] = 108;
               }
             }
           }
@@ -310,7 +313,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
       }
     }
 
-    // 3. Draw 9 ROI station boxes on overview
+    // 3. Draw 9 ROI station boxes on overview (with active selection ring)
     const aw = Math.max(1, session.metadata.activeWidth);
     const ah = Math.max(1, session.metadata.activeHeight);
 
@@ -325,20 +328,28 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         ? cell.relativeToCenter
         : 0;
       const stationValid = cell.validity === 'valid' && (idx === 4 || centerValid);
+      const isSelected = idx === selectedStationIdx;
+
+      if (isSelected) {
+        const pad = Math.max(3, ow / 340);
+        ctx.strokeStyle = 'hsla(0, 0%, 100%, 0.9)';
+        ctx.lineWidth = Math.max(1.5, ow / 560);
+        ctx.strokeRect(bx - pad, by - pad, boxW + pad * 2, boxH + pad * 2);
+      }
 
       ctx.strokeStyle =
         idx === 4
           ? cell.validity === 'valid'
-            ? 'hsl(37, 95%, 60%)'
-            : 'hsl(3, 86%, 66%)'
+            ? 'hsl(36, 95%, 60%)'
+            : 'hsl(4, 84%, 64%)'
           : !stationValid
-            ? 'hsla(215, 16%, 68%, 0.78)'
+            ? 'hsla(215, 14%, 70%, 0.78)'
             : safeRel >= 0.72
-              ? 'hsl(152, 72%, 56%)'
+              ? 'hsl(154, 72%, 54%)'
               : safeRel >= 0.48
-                ? 'hsl(37, 88%, 60%)'
-                : 'hsl(3, 86%, 66%)';
-      ctx.lineWidth = Math.max(1.5, ow / 520);
+                ? 'hsl(36, 88%, 60%)'
+                : 'hsl(4, 84%, 64%)';
+      ctx.lineWidth = Math.max(1.5, ow / 500);
       ctx.strokeRect(bx, by, boxW, boxH);
 
       // Station label tag
@@ -349,13 +360,21 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         : `${cell.id} --`;
       const tw = ctx.measureText(label).width + 8;
       const th = fontSize + 6;
-      ctx.fillStyle = 'hsla(220, 24%, 6%, 0.84)';
+      ctx.fillStyle = isSelected
+        ? 'hsla(220, 18%, 10%, 0.94)'
+        : 'hsla(220, 20%, 6%, 0.84)';
       ctx.fillRect(bx, Math.max(0, by - th), tw, th);
-      ctx.fillStyle = '#f1f5f9';
+      ctx.fillStyle = '#f8fafc';
       ctx.fillText(label, bx + 4, Math.max(fontSize, by - 4));
     });
     ctx.restore();
-  }, [session.overview, session.sharpness, session.metadata, showHeatmap]);
+  }, [
+    session.overview,
+    session.sharpness,
+    session.metadata,
+    showHeatmap,
+    selectedStationIdx,
+  ]);
 
   // Pointer drag inside any of the 9 loupes: either sync pan OR per-station ROI relocation
   const loupeDragRef = useRef<{
@@ -374,6 +393,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     cell: GridCellMetrics,
     e: React.PointerEvent<HTMLCanvasElement>,
   ) => {
+    setSelectedStationIdx(stationIdx);
     const relocating = dragMode === 'relocate_roi' || e.shiftKey;
     if (relocating && busy) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -449,6 +469,15 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     loupeDragRef.current = null;
   };
 
+  const handleLoupeDoubleClick = () => {
+    if (dragMode === 'relocate_roi') return;
+    setZoom((prev) => {
+      const next: ZoomFactor = prev === 1 ? 2 : prev === 2 ? 4 : 1;
+      if (next === 1) setPanPx({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
   // Dragging or clicking a station directly on the Overview Canvas
   const overviewDragStationRef = useRef<number | null>(null);
 
@@ -476,6 +505,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     const nx = (e.clientX - rect.left) / Math.max(1, rect.width);
     const ny = (e.clientY - rect.top) / Math.max(1, rect.height);
     const nearest = findNearestStation(nx, ny);
+    setSelectedStationIdx(nearest);
     e.currentTarget.setPointerCapture(e.pointerId);
     overviewDragStationRef.current = nearest;
   };
@@ -515,6 +545,9 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     Number.isFinite(sharpness.centerSharpness) &&
     sharpness.centerSharpness > 1e-6;
 
+  const activeCell =
+    sharpness.grid3x3[selectedStationIdx] ?? sharpness.grid3x3[4];
+
   // Polar compass vector endpoint (radius max = 44px mapped to tilt magnitude 0.30)
   const compassRadius = 44;
   const safeMag = Number.isFinite(tv.magnitude) ? Math.max(0, tv.magnitude) : 0;
@@ -525,26 +558,35 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
   const collapseRad = (safeCollapseDeg * Math.PI) / 180;
   const arrowX = 60 + Math.cos(collapseRad) * normMag * compassRadius;
   const arrowY = 60 + Math.sin(collapseRad) * normMag * compassRadius;
+  const vectorStroke =
+    tv.magnitude >= 0.2
+      ? 'var(--alert-coral)'
+      : tv.magnitude >= 0.09
+        ? 'var(--accent-amber)'
+        : 'var(--optical-green)';
+
+  const exposureSummary = [
+    session.metadata.focalLengthMm
+      ? `${session.metadata.focalLengthMm.toFixed(0)}mm`
+      : null,
+    session.metadata.fNumber
+      ? `f/${session.metadata.fNumber.toFixed(1)}`
+      : null,
+    session.metadata.shutterDisplay,
+    session.metadata.iso ? `ISO ${session.metadata.iso}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
-    <div className="max-w-[1680px] mx-auto w-full px-4 py-4 grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
-      {/* Left / Primary Column: 9-Grid Synchronized 1:1 Sensor Loupe Workbench */}
+    <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_396px]">
+      {/* Left Primary Stage: 9-Zone 1:1 Synchronized Pixel Loupe */}
       <section
         aria-label={t.tilt.sectionLoupeAria}
-        className="xl:col-span-8 instrument-panel overflow-hidden"
+        className="flex flex-col min-h-0 min-w-0"
       >
-        <div className="panel-header">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <h2 className="panel-title">
-              <Crosshair size={15} className="text-[var(--accent-amber)]" />
-              <span>{t.tilt.loupePanelTitle}</span>
-            </h2>
-            <span className={gradeBadgeClass}>
-              {t.tilt.grades[sharpness.grade]}
-            </span>
-          </div>
-
-          {/* Loupe Toolbar */}
+        {/* Unified Single-Row Precision Viewport Toolbar */}
+        <div className="viewport-toolbar">
           <div className="flex items-center gap-2 flex-wrap">
             {/* Zoom 100% / 200% / 400% */}
             <div
@@ -561,10 +603,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                     if (z === 1) setPanPx({ x: 0, y: 0 });
                     setZoom(z);
                   }}
-                  className={`segmented-btn mono-num ${zoom === z ? 'is-active' : ''}`}
-                  style={{ padding: '0.26rem 0.6rem', fontSize: '0.75rem' }}
+                  className={`segmented-btn mono-num ${
+                    zoom === z ? 'is-active' : ''
+                  }`}
                 >
-                  <ZoomIn size={12} />
                   <span>{z * 100}%</span>
                 </button>
               ))}
@@ -580,23 +622,93 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 id="btn-drag-mode-pan"
                 type="button"
                 onClick={() => setDragMode('sync_pan')}
-                className={`segmented-btn ${dragMode === 'sync_pan' ? 'is-active' : ''}`}
-                style={{ padding: '0.26rem 0.6rem', fontSize: '0.75rem' }}
+                className={`segmented-btn ${
+                  dragMode === 'sync_pan' ? 'is-active' : ''
+                }`}
                 title={t.tilt.dragSyncPanTitle}
               >
-                <Eye size={12} />
+                <Eye size={12} className="mode-indicator" />
                 <span>{t.tilt.dragSyncPan}</span>
               </button>
               <button
                 id="btn-drag-mode-relocate"
                 type="button"
                 onClick={() => setDragMode('relocate_roi')}
-                className={`segmented-btn ${dragMode === 'relocate_roi' ? 'is-active' : ''}`}
-                style={{ padding: '0.26rem 0.6rem', fontSize: '0.75rem' }}
+                className={`segmented-btn ${
+                  dragMode === 'relocate_roi' ? 'is-active' : ''
+                }`}
                 title={t.tilt.dragRelocateRoiTitle}
               >
-                <Move size={12} />
+                <Move size={12} className="mode-indicator" />
                 <span>{t.tilt.dragRelocateRoi}</span>
+              </button>
+            </div>
+
+            {/* Signal Path Segmented Switch */}
+            <div
+              className="segmented-control"
+              role="group"
+              aria-label={t.tilt.renderChannelLabel}
+            >
+              {([0, 1, 2] as PatchRenderModeCode[]).map((code) => (
+                <button
+                  key={code}
+                  id={`btn-patch-mode-${code}`}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onUpdateRenderParams(displayEv, code)}
+                  title={t.tilt.patchModes[code]}
+                  className={`segmented-btn ${
+                    session.patchMode === code ? 'is-active' : ''
+                  }`}
+                >
+                  <span>{t.tilt.patchModesShort[code]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Right Viewport Controls: EV Boost, Reticle, Reset */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex items-center gap-2 px-2 h-[28px] rounded-[var(--radius-sm)] bg-[var(--bg-elevated)] border border-[var(--hairline-subtle)] text-xs">
+              <Sliders size={12} className="text-[var(--text-muted)]" />
+              <label
+                htmlFor="slider-ev-boost"
+                className="text-[11px] text-[var(--text-secondary)] select-none"
+              >
+                {t.tilt.evBoostLabel}
+              </label>
+              <input
+                id="slider-ev-boost"
+                type="range"
+                min={-2}
+                max={5}
+                step={0.25}
+                value={displayEv}
+                disabled={busy}
+                onChange={(e) => setEvDraft(parseFloat(e.target.value))}
+                onPointerUp={commitEvDraft}
+                onPointerCancel={commitEvDraft}
+                onKeyUp={commitEvDraft}
+                onBlur={commitEvDraft}
+                className="optical-slider w-20"
+              />
+              <button
+                id="btn-reset-ev"
+                type="button"
+                disabled={busy}
+                title={t.tilt.evResetHint}
+                onClick={() => {
+                  setEvDraft(null);
+                  if (Math.abs(session.evBoost) > 1e-6) {
+                    onUpdateRenderParams(0, session.patchMode);
+                  }
+                }}
+                className="mono-num text-[11px] w-14 text-right text-[var(--text-primary)] hover:text-[var(--accent-amber)] cursor-pointer bg-transparent border-none p-0"
+              >
+                {displayEv >= 0
+                  ? `+${displayEv.toFixed(2)}`
+                  : displayEv.toFixed(2)}
               </button>
             </div>
 
@@ -604,10 +716,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               id="btn-toggle-reticle"
               type="button"
               onClick={() => setShowReticle((v) => !v)}
-              className="btn-instrument"
-              style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+              className={`btn-instrument ${showReticle ? 'is-toggled' : ''}`}
             >
-              {t.tilt.reticleToggle(showReticle)}
+              <Crosshair size={12} />
+              <span>{t.tilt.reticleToggle(showReticle)}</span>
             </button>
 
             <button
@@ -619,7 +731,6 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 onResetStations();
               }}
               className="btn-instrument"
-              style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
               title={t.tilt.resetStationsTitle}
             >
               <RotateCcw size={12} />
@@ -628,227 +739,181 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           </div>
         </div>
 
-        {/* Signal Path & Exposure Controls Strip */}
-        <div className="px-4 py-2.5 bg-[var(--bg-surface-1)] border-b border-[var(--hairline-subtle)] flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[var(--text-muted)]">
-              {t.tilt.renderChannelLabel}
-            </span>
-            {([0, 1, 2] as PatchRenderModeCode[]).map((code) => (
-              <button
-                key={code}
-                id={`btn-patch-mode-${code}`}
-                type="button"
-                disabled={busy}
-                onClick={() => onUpdateRenderParams(displayEv, code)}
-                className={`btn-instrument ${
-                  session.patchMode === code
-                    ? 'border-[var(--accent-amber)] text-[var(--accent-amber)]'
-                    : ''
-                }`}
-                style={{ padding: '0.24rem 0.58rem', fontSize: '0.74rem' }}
-              >
-                {t.tilt.patchModes[code]}
-              </button>
-            ))}
-          </div>
+        {/* 3x3 Synchronized 1:1 Sensor Loupe Canvas Stage */}
+        <div className="loupe-stage-wrap">
+          <div className="loupe-matrix">
+            {sharpness.grid3x3.map((cell, idx) => {
+              const isCenter = idx === 4;
+              const isSelected = idx === selectedStationIdx;
+              const safeRel = Number.isFinite(cell.relativeToCenter)
+                ? cell.relativeToCenter
+                : 0;
+              const retPct = Math.round(safeRel * 100);
+              const retColor = isCenter
+                ? cell.validity === 'valid'
+                  ? 'hsl(36, 92%, 64%)'
+                  : 'hsl(4, 86%, 70%)'
+                : cell.validity !== 'valid' || !centerIsValid
+                  ? 'hsl(215, 10%, 62%)'
+                  : retPct >= 75
+                    ? 'hsl(154, 72%, 60%)'
+                    : retPct >= 50
+                      ? 'hsl(36, 92%, 64%)'
+                      : 'hsl(4, 86%, 70%)';
 
-          <div className="flex items-center gap-2.5">
-            <Sliders size={13} className="text-[var(--text-muted)]" />
-            <label htmlFor="slider-ev-boost" className="text-[var(--text-secondary)]">
-              {t.tilt.evBoostLabel}
-            </label>
-            <input
-              id="slider-ev-boost"
-              type="range"
-              min={-2}
-              max={5}
-              step={0.25}
-              value={displayEv}
-              disabled={busy}
-              onChange={(e) => setEvDraft(parseFloat(e.target.value))}
-              onPointerUp={commitEvDraft}
-              onPointerCancel={commitEvDraft}
-              onKeyUp={commitEvDraft}
-              onBlur={commitEvDraft}
-              className="optical-slider w-24"
-            />
-            <span className="mono-num w-14 text-right text-[var(--text-primary)]">
-              {displayEv >= 0 ? `+${displayEv.toFixed(2)}` : displayEv.toFixed(2)} EV
-            </span>
-          </div>
-        </div>
-
-        {/* 3x3 Synchronized Canvas Matrix */}
-        <div className="loupe-matrix">
-          {sharpness.grid3x3.map((cell, idx) => {
-            const isCenter = idx === 4;
-            const safeRel = Number.isFinite(cell.relativeToCenter)
-              ? cell.relativeToCenter
-              : 0;
-            const retPct = Math.round(safeRel * 100);
-            const retTone = isCenter
-              ? cell.validity === 'valid'
-                ? 'text-[var(--accent-amber)]'
-                : 'text-[var(--alert-coral)]'
-              : cell.validity !== 'valid' || !centerIsValid
-                ? 'text-[var(--text-muted)]'
-                : retPct >= 75
-                  ? 'text-[var(--optical-green)]'
-                  : retPct >= 50
-                    ? 'text-[var(--accent-amber)]'
-                    : 'text-[var(--alert-coral)]';
-
-            return (
-              <div
-                key={cell.id}
-                id={`loupe-station-${cell.id}`}
-                className={`loupe-cell ${isCenter ? 'is-center' : ''}`}
-              >
-                <canvas
-                  ref={(el) => {
-                    loupeCanvasRefs.current[idx] = el;
-                  }}
-                  onPointerDown={(e) => handleLoupePointerDown(idx, cell, e)}
-                  onPointerMove={handleLoupePointerMove}
-                  onPointerUp={handleLoupePointerUp}
-                  onPointerCancel={handleLoupePointerCancel}
-                  className={`loupe-canvas ${
-                    dragMode === 'relocate_roi'
-                      ? 'cursor-move'
-                      : zoom > 1
-                        ? 'cursor-grab active:cursor-grabbing'
-                        : 'cursor-crosshair'
+              return (
+                <div
+                  key={cell.id}
+                  id={`loupe-station-${cell.id}`}
+                  className={`loupe-cell ${isCenter ? 'is-center' : ''} ${
+                    isSelected ? 'is-selected' : ''
                   }`}
-                />
+                >
+                  <canvas
+                    ref={(el) => {
+                      loupeCanvasRefs.current[idx] = el;
+                    }}
+                    onPointerDown={(e) => handleLoupePointerDown(idx, cell, e)}
+                    onPointerMove={handleLoupePointerMove}
+                    onPointerUp={handleLoupePointerUp}
+                    onPointerCancel={handleLoupePointerCancel}
+                    onDoubleClick={handleLoupeDoubleClick}
+                    className={`loupe-canvas ${
+                      dragMode === 'relocate_roi'
+                        ? 'cursor-move'
+                        : zoom > 1
+                          ? 'cursor-grab active:cursor-grabbing'
+                          : 'cursor-crosshair'
+                    }`}
+                  />
 
-                {/* Top HUD */}
-                <div className="loupe-hud-top">
-                  <div className="flex items-center gap-1.5">
-                    <span className="mono-num font-semibold px-1.5 py-0.5 rounded bg-[hsla(220,25%,8%,0.85)] text-[var(--text-primary)] border border-[var(--hairline-default)]">
-                      {cell.id}
+                  {/* Top Micro-HUD */}
+                  <div className="loupe-hud-top">
+                    <div className="flex items-center gap-1">
+                      <span className="loupe-pill mono-num font-semibold">
+                        {cell.id}
+                      </span>
+                      {cell.medianStarHfrPx !== null &&
+                        Number.isFinite(cell.medianStarHfrPx) &&
+                        cell.starCount > 0 && (
+                          <span
+                            className="loupe-pill mono-num"
+                            style={{ color: 'hsl(204, 90%, 68%)' }}
+                          >
+                            HFR {cell.medianStarHfrPx.toFixed(2)}px
+                          </span>
+                        )}
+                    </div>
+
+                    <span
+                      className="loupe-pill mono-num font-semibold"
+                      style={{ color: retColor }}
+                    >
+                      {isCenter
+                        ? cell.validity === 'valid'
+                          ? t.tilt.hudCenterRef
+                          : t.tilt.hudCenterInvalid(
+                              t.tilt.validities[cell.validity],
+                            )
+                        : cell.validity !== 'valid'
+                          ? t.tilt.validities[cell.validity]
+                          : !centerIsValid
+                            ? t.tilt.hudInvalidRef
+                            : t.tilt.hudRetention(retPct)}
                     </span>
-                    {cell.medianStarHfrPx !== null &&
-                      Number.isFinite(cell.medianStarHfrPx) &&
-                      cell.starCount > 0 && (
-                        <span className="mono-num px-1.5 py-0.5 rounded bg-[hsla(201,80%,16%,0.82)] text-[var(--channel-b)]">
-                          HFR {cell.medianStarHfrPx.toFixed(2)}px
-                        </span>
-                      )}
                   </div>
 
-                  <span
-                    className={`mono-num font-semibold px-1.5 py-0.5 rounded bg-[hsla(220,25%,8%,0.85)] ${retTone}`}
-                  >
-                    {isCenter
-                      ? cell.validity === 'valid'
-                        ? t.tilt.hudCenterRef
-                        : t.tilt.hudCenterInvalid(
-                            t.tilt.validities[cell.validity],
-                          )
-                      : cell.validity !== 'valid'
-                        ? t.tilt.validities[cell.validity]
-                        : !centerIsValid
-                          ? t.tilt.hudInvalidRef
-                          : t.tilt.hudRetention(retPct)}
-                  </span>
+                  {/* Bottom Micro-HUD */}
+                  <div className="loupe-hud-bottom mono-num">
+                    <span>S {cell.sharpness.toFixed(4)}</span>
+                    <span>
+                      {cell.sensorRect[0]},{cell.sensorRect[1]}
+                    </span>
+                  </div>
                 </div>
-
-                {/* Bottom HUD */}
-                <div className="loupe-hud-bottom mono-num text-[var(--text-secondary)]">
-                  <span>S={cell.sharpness.toFixed(4)}</span>
-                  <span>
-                    ({cell.sensorRect[0]}, {cell.sensorRect[1]}) px
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
-        <div className="px-4 pb-3 text-[11px] text-[var(--text-muted)] flex flex-wrap items-center justify-between gap-2">
+        {/* Stage Hint Bar */}
+        <div className="px-3.5 py-1.5 bg-[var(--bg-panel)] border-t border-[var(--hairline-default)] flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-muted)] shrink-0">
           <span>{t.tilt.loupeHint}</span>
           <span className="mono-num">{t.tilt.nearestNeighborBadge}</span>
         </div>
       </section>
 
-      {/* Right Column: Overview Contour Heatmap + Tilt Vector Polar Compass + Retention Telemetry */}
-      <aside className="xl:col-span-4 flex flex-col gap-4">
-        {/* Overview Canvas + 5x5 Sharpness Contour Heatmap */}
+      {/* Right Docked Optical Inspector */}
+      <aside className="inspector-dock border-t xl:border-t-0 xl:border-l border-[var(--hairline-default)] xl:overflow-y-auto xl:h-full">
+        {/* Section 1: Verdict & Optic Summary */}
+        <section
+          aria-label={t.tilt.collimationSectionAria}
+          className="inspector-section space-y-2"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="section-eyebrow">{t.tilt.verdictHeader}</span>
+            <span className={gradeBadgeClass}>
+              {t.tilt.grades[sharpness.grade]}
+            </span>
+          </div>
+          <div className="text-[13.5px] font-semibold text-[var(--text-primary)] leading-snug">
+            {localizedDiag.verdictTitle}
+          </div>
+          <div className="text-[11px] text-[var(--text-muted)] mono-num truncate">
+            {session.filename}
+            {exposureSummary ? ` · ${exposureSummary}` : ''}
+          </div>
+        </section>
+
+        {/* Section 2: Full-Frame Field Map & 5x5 Contour Heatmap */}
         <section
           aria-label={t.tilt.overviewSectionAria}
-          className="instrument-panel overflow-hidden"
+          className="inspector-section space-y-2.5"
         >
-          <div className="panel-header">
-            <h3 className="panel-title">
-              <Flame size={15} className="text-[var(--accent-amber)]" />
-              <span>{t.tilt.overviewTitle}</span>
-            </h3>
+          <div className="flex items-center justify-between gap-2">
+            <span className="section-eyebrow">{t.tilt.overviewTitle}</span>
             <button
               id="btn-toggle-heatmap"
               type="button"
               onClick={() => setShowHeatmap((v) => !v)}
-              className={`btn-instrument ${
-                showHeatmap
-                  ? 'border-[var(--accent-amber)] text-[var(--accent-amber)]'
-                  : ''
-              }`}
-              style={{ padding: '0.26rem 0.62rem', fontSize: '0.74rem' }}
+              className={`btn-instrument ${showHeatmap ? 'is-toggled' : ''}`}
+              style={{ height: '22px', padding: '0 0.5rem', fontSize: '0.7rem' }}
             >
               {showHeatmap ? t.tilt.btnHideHeatmap : t.tilt.btnShowHeatmap}
             </button>
           </div>
 
-          <div className="p-3 bg-[var(--bg-loupe)]">
-            <div className="rounded-md border border-[var(--hairline-subtle)] overflow-hidden">
-              <canvas
-                id="overview-heatmap-canvas"
-                ref={overviewCanvasRef}
-                onPointerDown={handleOverviewPointerDown}
-                onPointerUp={handleOverviewPointerUp}
-                onPointerCancel={handleOverviewPointerCancel}
-                className="w-full h-auto cursor-crosshair block"
-              />
-            </div>
+          <div className="rounded-[var(--radius-sm)] bg-[#08090b] border border-[var(--hairline-default)] overflow-hidden">
+            <canvas
+              id="overview-heatmap-canvas"
+              ref={overviewCanvasRef}
+              onPointerDown={handleOverviewPointerDown}
+              onPointerUp={handleOverviewPointerUp}
+              onPointerCancel={handleOverviewPointerCancel}
+              className="w-full h-auto cursor-crosshair block"
+            />
+          </div>
 
-            {/* Heatmap Color Scale Legend */}
-            <div className="mt-2.5 flex items-center justify-between text-[11px] text-[var(--text-muted)] mono-num">
-              <span>{t.tilt.legendCollapse}</span>
-              <div
-                className="h-2 flex-1 mx-3 rounded-full"
-                style={{
-                  background:
-                    'linear-gradient(90deg, rgb(180,42,58) 0%, rgb(225,90,48) 35%, rgb(70,198,116) 72%, rgb(52,230,140) 100%)',
-                }}
-              />
-              <span>{t.tilt.legendCenterPeak}</span>
-            </div>
+          <div className="flex items-center justify-between text-[10.5px] text-[var(--text-muted)] mono-num">
+            <span>{t.tilt.legendCollapse}</span>
+            <div
+              className="h-1.5 flex-1 mx-2.5 rounded-full"
+              style={{
+                background:
+                  'linear-gradient(90deg, rgb(180,42,58) 0%, rgb(225,90,48) 35%, rgb(70,198,116) 72%, rgb(52,230,140) 100%)',
+              }}
+            />
+            <span>{t.tilt.legendCenterPeak}</span>
           </div>
         </section>
 
-        {/* Optical Collimation & Tilt Vector Telemetry */}
-        <section
-          aria-label={t.tilt.collimationSectionAria}
-          className="instrument-panel p-4 space-y-4"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-xs text-[var(--text-muted)]">
-                {t.tilt.verdictHeader}
-              </div>
-              <div className="text-sm font-semibold text-[var(--text-primary)] mt-0.5">
-                {localizedDiag.verdictTitle}
-              </div>
-            </div>
-            <Compass size={18} className="text-[var(--accent-amber)] shrink-0" />
-          </div>
-
-          {/* Polar Tilt Vector Compass + Core Numbers */}
-          <div className="grid grid-cols-12 gap-3 items-center bg-[var(--bg-surface-1)] p-3 rounded-lg border border-[var(--hairline-subtle)]">
+        {/* Section 3: Polar Tilt Compass & Collimation Vector */}
+        <section className="inspector-section">
+          <div className="grid grid-cols-12 gap-3 items-center">
             <div className="col-span-5 flex justify-center">
               <svg
-                width="120"
-                height="120"
+                width="116"
+                height="116"
                 viewBox="0 0 120 120"
                 aria-label={t.tilt.compassAria}
               >
@@ -856,17 +921,34 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   cx="60"
                   cy="60"
                   r="46"
-                  fill="hsl(220, 20%, 5%)"
-                  stroke="hsla(210, 16%, 85%, 0.16)"
+                  fill="var(--compass-bg)"
+                  stroke="var(--compass-ring)"
                   strokeWidth="1"
                 />
-                {/* Mild threshold ring (0.09 / 0.30 * 44 = 13.2) & Severe ring (0.20 / 0.30 * 44 = 29.3) */}
+                {/* 30-degree precision azimuth ticks */}
+                {Array.from({ length: 12 }, (_, i) => {
+                  const rad = (i * 30 * Math.PI) / 180;
+                  const r1 = i % 3 === 0 ? 41 : 43.5;
+                  const r2 = 46;
+                  return (
+                    <line
+                      key={i}
+                      x1={60 + Math.cos(rad) * r1}
+                      y1={60 + Math.sin(rad) * r1}
+                      x2={60 + Math.cos(rad) * r2}
+                      y2={60 + Math.sin(rad) * r2}
+                      stroke="var(--compass-ring)"
+                      strokeWidth="1"
+                    />
+                  );
+                })}
+                {/* Mild (0.09) & Severe (0.20) tolerance rings */}
                 <circle
                   cx="60"
                   cy="60"
                   r="14"
                   fill="none"
-                  stroke="hsla(152, 62%, 48%, 0.32)"
+                  stroke="var(--optical-green-border)"
                   strokeDasharray="2 2"
                 />
                 <circle
@@ -874,7 +956,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   cy="60"
                   r="29"
                   fill="none"
-                  stroke="hsla(37, 88%, 56%, 0.32)"
+                  stroke="var(--accent-amber-border)"
                   strokeDasharray="3 2"
                 />
                 <line
@@ -882,21 +964,22 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   y1="60"
                   x2="106"
                   y2="60"
-                  stroke="hsla(210, 16%, 85%, 0.1)"
+                  stroke="var(--compass-axis)"
                 />
                 <line
                   x1="60"
                   y1="14"
                   x2="60"
                   y2="106"
-                  stroke="hsla(210, 16%, 85%, 0.1)"
+                  stroke="var(--compass-axis)"
                 />
                 <text
                   x="60"
-                  y="11"
+                  y="10"
                   textAnchor="middle"
-                  fontSize="8"
-                  fill="hsl(215, 10%, 52%)"
+                  fontSize="7.5"
+                  fontFamily="JetBrains Mono, monospace"
+                  fill="var(--text-muted)"
                 >
                   {t.tilt.compassTop}
                 </text>
@@ -904,8 +987,9 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   x="60"
                   y="116"
                   textAnchor="middle"
-                  fontSize="8"
-                  fill="hsl(215, 10%, 52%)"
+                  fontSize="7.5"
+                  fontFamily="JetBrains Mono, monospace"
+                  fill="var(--text-muted)"
                 >
                   {t.tilt.compassBottom}
                 </text>
@@ -916,34 +1000,17 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   y1="60"
                   x2={arrowX}
                   y2={arrowY}
-                  stroke={
-                    tv.magnitude >= 0.2
-                      ? 'hsl(3, 82%, 63%)'
-                      : tv.magnitude >= 0.09
-                        ? 'hsl(37, 88%, 56%)'
-                        : 'hsl(152, 62%, 48%)'
-                  }
-                  strokeWidth="2.5"
+                  stroke={vectorStroke}
+                  strokeWidth="2.2"
                   strokeLinecap="round"
                 />
-                <circle
-                  cx={arrowX}
-                  cy={arrowY}
-                  r="3.8"
-                  fill={
-                    tv.magnitude >= 0.2
-                      ? 'hsl(3, 82%, 63%)'
-                      : tv.magnitude >= 0.09
-                        ? 'hsl(37, 88%, 56%)'
-                        : 'hsl(152, 62%, 48%)'
-                  }
-                />
-                <circle cx="60" cy="60" r="2.2" fill="#e2e8f0" />
+                <circle cx={arrowX} cy={arrowY} r="3.5" fill={vectorStroke} />
+                <circle cx="60" cy="60" r="2" fill="var(--text-primary)" />
               </svg>
             </div>
 
-            <div className="col-span-7 space-y-1.5 text-xs">
-              <div className="flex justify-between">
+            <div className="col-span-7 divide-y divide-[var(--hairline-subtle)]">
+              <div className="kv-row">
                 <span className="text-[var(--text-muted)]">
                   {t.tilt.metricTiltMag}
                 </span>
@@ -951,7 +1018,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   {tv.magnitude.toFixed(3)}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="kv-row">
                 <span className="text-[var(--text-muted)]">
                   {t.tilt.metricCollapseDir}
                 </span>
@@ -959,7 +1026,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   {localizedDiag.collapseDirectionLabel}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="kv-row">
                 <span className="text-[var(--text-muted)]">
                   {t.tilt.metricCollapseAngle}
                 </span>
@@ -967,7 +1034,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   {tv.collapseAngleDeg.toFixed(1)}°
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="kv-row">
                 <span className="text-[var(--text-muted)]">
                   {t.tilt.metricRadialFalloff}
                 </span>
@@ -975,7 +1042,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                   {sharpness.radialFalloff.toFixed(3)}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="kv-row">
                 <span className="text-[var(--text-muted)]">
                   {t.tilt.metricCenterSharpness}
                 </span>
@@ -985,90 +1052,153 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               </div>
             </div>
           </div>
+        </section>
 
-          {/* 4-Corner Retention & Diagonal Asymmetry */}
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-medium text-[var(--text-secondary)]">
-                {t.tilt.cornerRetentionTitle}
-              </span>
-              <span className="mono-num text-[var(--text-primary)]">
-                {t.tilt.cornerMean(
-                  (sharpness.cornerRetention.mean * 100).toFixed(1),
-                )}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  ['tl', t.tilt.cornerLabels.tl, sharpness.cornerRetention.tl],
-                  ['tr', t.tilt.cornerLabels.tr, sharpness.cornerRetention.tr],
-                  ['bl', t.tilt.cornerLabels.bl, sharpness.cornerRetention.bl],
-                  ['br', t.tilt.cornerLabels.br, sharpness.cornerRetention.br],
-                ] as const
-              ).map(([key, label, val]) => {
-                const pct = Math.min(120, Math.max(0, val * 100));
-                const barColor =
-                  val >= 0.72
-                    ? 'var(--optical-green)'
-                    : val >= 0.48
-                      ? 'var(--accent-amber)'
-                      : 'var(--alert-coral)';
-                return (
-                  <div
-                    key={key}
-                    className="p-2 rounded-md bg-[var(--bg-surface-1)] border border-[var(--hairline-subtle)] space-y-1"
-                  >
-                    <div className="flex justify-between text-xs">
-                      <span className="text-[var(--text-secondary)]">{label}</span>
-                      <span className="mono-num font-medium text-[var(--text-primary)]">
-                        {(val * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-[var(--bg-surface-3)] overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-200"
-                        style={{
-                          width: `${Math.min(100, pct)}%`,
-                          backgroundColor: barColor,
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
-              <div className="p-2 rounded-md bg-[var(--bg-surface-1)] border border-[var(--hairline-subtle)] flex justify-between">
-                <span className="text-[var(--text-muted)]">
-                  {t.tilt.diagDiffTlBr}
-                </span>
-                <span className="mono-num text-[var(--text-primary)]">
-                  {(sharpness.asymmetry.tlBrDiff * 100).toFixed(1)}%
-                </span>
-              </div>
-              <div className="p-2 rounded-md bg-[var(--bg-surface-1)] border border-[var(--hairline-subtle)] flex justify-between">
-                <span className="text-[var(--text-muted)]">
-                  {t.tilt.diagDiffTrBl}
-                </span>
-                <span className="mono-num text-[var(--text-primary)]">
-                  {(sharpness.asymmetry.trBlDiff * 100).toFixed(1)}%
-                </span>
-              </div>
-            </div>
+        {/* Section 4: 4-Corner Retention & Diagonal Balance */}
+        <section className="inspector-section space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="section-eyebrow">
+              {t.tilt.cornerRetentionTitle}
+            </span>
+            <span className="status-tag">
+              {t.tilt.cornerMean(
+                (sharpness.cornerRetention.mean * 100).toFixed(1),
+              )}
+            </span>
           </div>
 
-          {/* Diagnostic Notes */}
+          <div className="space-y-1.5">
+            {(
+              [
+                ['tl', t.tilt.cornerLabels.tl, sharpness.cornerRetention.tl],
+                ['tr', t.tilt.cornerLabels.tr, sharpness.cornerRetention.tr],
+                ['bl', t.tilt.cornerLabels.bl, sharpness.cornerRetention.bl],
+                ['br', t.tilt.cornerLabels.br, sharpness.cornerRetention.br],
+              ] as const
+            ).map(([key, label, val]) => {
+              const stationIdx = CORNER_INDEX_MAP[key];
+              const isSelected = selectedStationIdx === stationIdx;
+              const safeVal = Number.isFinite(val) ? Math.max(0, val) : 0;
+              const pct = Math.min(100, safeVal * 100);
+              const barColor =
+                safeVal >= 0.72
+                  ? 'var(--optical-green)'
+                  : safeVal >= 0.48
+                    ? 'var(--accent-amber)'
+                    : 'var(--alert-coral)';
+
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSelectedStationIdx(stationIdx)}
+                  className={`w-full grid grid-cols-[84px_1fr_48px] items-center gap-2.5 px-2 py-1 rounded-[var(--radius-xs)] border text-left cursor-pointer transition-colors ${
+                    isSelected
+                      ? 'bg-[var(--bg-elevated)] border-[var(--hairline-strong)]'
+                      : 'bg-transparent border-transparent hover:bg-[var(--bg-hover)]'
+                  }`}
+                >
+                  <span className="text-xs text-[var(--text-secondary)] truncate">
+                    {label}
+                  </span>
+                  <div className="h-1.5 rounded-full bg-[var(--bg-elevated)] overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-200"
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: barColor,
+                      }}
+                    />
+                  </div>
+                  <span className="mono-num text-xs font-medium text-right text-[var(--text-primary)]">
+                    {(safeVal * 100).toFixed(1)}%
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <div className="px-2.5 py-1.5 rounded-[var(--radius-xs)] bg-[var(--bg-panel-subtle)] border border-[var(--hairline-subtle)] flex items-center justify-between text-xs">
+              <span className="text-[var(--text-muted)]">
+                {t.tilt.diagDiffTlBr}
+              </span>
+              <span className="mono-num font-medium text-[var(--text-primary)]">
+                {(sharpness.asymmetry.tlBrDiff * 100).toFixed(1)}%
+              </span>
+            </div>
+            <div className="px-2.5 py-1.5 rounded-[var(--radius-xs)] bg-[var(--bg-panel-subtle)] border border-[var(--hairline-subtle)] flex items-center justify-between text-xs">
+              <span className="text-[var(--text-muted)]">
+                {t.tilt.diagDiffTrBl}
+              </span>
+              <span className="mono-num font-medium text-[var(--text-primary)]">
+                {(sharpness.asymmetry.trBlDiff * 100).toFixed(1)}%
+              </span>
+            </div>
+          </div>
+        </section>
+
+        {/* Section 5: Selected Station Sub-Plane Telemetry & Notes */}
+        <section className="inspector-section space-y-3">
+          {activeCell && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="section-eyebrow">
+                  {t.tilt.activeStationTitle}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="status-tag">{activeCell.id}</span>
+                  <span className="status-tag">
+                    {t.tilt.validities[activeCell.validity]}
+                  </span>
+                </div>
+              </div>
+
+              <div className="divide-y divide-[var(--hairline-subtle)]">
+                <div className="kv-row">
+                  <span className="text-[var(--text-muted)]">
+                    {t.tilt.metricG1G2}
+                  </span>
+                  <span className="mono-num text-[var(--text-primary)]">
+                    {activeCell.sharpnessG1.toFixed(4)} /{' '}
+                    {activeCell.sharpnessG2.toFixed(4)}
+                  </span>
+                </div>
+                <div className="kv-row">
+                  <span className="text-[var(--text-muted)]">
+                    {t.tilt.metricSignalClip}
+                  </span>
+                  <span className="mono-num text-[var(--text-secondary)]">
+                    {(activeCell.meanSignalNorm * 100).toFixed(1)}% /{' '}
+                    {(activeCell.clippedFraction * 100).toFixed(2)}%
+                  </span>
+                </div>
+                <div className="kv-row">
+                  <span className="text-[var(--text-muted)]">
+                    {t.tilt.metricStarHfr}
+                  </span>
+                  <span className="mono-num text-[var(--text-secondary)]">
+                    {activeCell.starCount > 0 &&
+                    activeCell.medianStarHfrPx !== null
+                      ? `${activeCell.starCount} · ${activeCell.medianStarHfrPx.toFixed(2)} px`
+                      : '—'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {localizedDiag.notes.length > 0 && (
-            <ul className="space-y-1.5 text-xs text-[var(--text-secondary)] border-t border-[var(--hairline-subtle)] pt-3 list-disc pl-4">
-              {localizedDiag.notes.map((n, i) => (
-                <li key={i} className="leading-relaxed">
-                  {n}
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-1.5 pt-2 border-t border-[var(--hairline-subtle)]">
+              <div className="section-eyebrow">{t.tilt.notesHeader}</div>
+              <ul className="space-y-1.5 text-xs text-[var(--text-secondary)] m-0 pl-4 list-disc">
+                {localizedDiag.notes.map((n, i) => (
+                  <li key={i} className="leading-relaxed">
+                    {n}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </section>
       </aside>
