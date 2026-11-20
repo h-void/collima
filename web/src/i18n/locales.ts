@@ -28,6 +28,8 @@ export interface TranslationMessages {
   themeLightLabel: string;
   statusReady: string;
   langMenuAriaLabel: string;
+  githubSourceLabel: string;
+  githubSourceAriaLabel: string;
 
   telemetryRegionAria: string;
   telemetryLens: string;
@@ -216,6 +218,8 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
     themeLightLabel: '切换至中性暗房主题',
     statusReady: '本地引擎就绪',
     langMenuAriaLabel: '切换界面语言',
+    githubSourceLabel: 'GitHub 源码',
+    githubSourceAriaLabel: '前往 GitHub 查看 collima 源代码',
 
     telemetryRegionAria: 'RAW 元数据与解码遥测',
     telemetryLens: '镜头',
@@ -432,6 +436,8 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
     themeLightLabel: '切換至中性暗房主題',
     statusReady: '本機引擎就緒',
     langMenuAriaLabel: '切換介面語言',
+    githubSourceLabel: 'GitHub 原始碼',
+    githubSourceAriaLabel: '前往 GitHub 檢視 collima 原始碼',
 
     telemetryRegionAria: 'RAW 中繼資料與解碼遙測',
     telemetryLens: '鏡頭',
@@ -648,6 +654,8 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
     themeLightLabel: 'Switch to Neutral Darkroom theme',
     statusReady: 'Engine Ready',
     langMenuAriaLabel: 'Switch interface language',
+    githubSourceLabel: 'GitHub Source',
+    githubSourceAriaLabel: 'View collima source repository on GitHub',
 
     telemetryRegionAria: 'RAW metadata and decode telemetry',
     telemetryLens: 'Lens',
@@ -864,6 +872,8 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
     themeLightLabel: 'ダークルームへ切替',
     statusReady: 'エンジン待機中',
     langMenuAriaLabel: '表示言語を切り替え',
+    githubSourceLabel: 'GitHub ソース',
+    githubSourceAriaLabel: 'GitHub で collima のソースコードを表示',
 
     telemetryRegionAria: 'RAW メタデータおよびデコード情報',
     telemetryLens: 'レンズ',
