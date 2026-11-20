@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Aperture,
+  ArrowUpRight,
   ChevronDown,
   Cpu,
   FlaskConical,
@@ -448,44 +449,47 @@ export const App: React.FC = () => {
       }`}
     >
       {/* Top 44px Precision Command Bar */}
-      <header className="topbar">
-        <div className="topbar-inner">
+      <header className="topbar max-md:h-auto!">
+        <div className="topbar-inner max-md:h-auto! max-md:flex-wrap max-md:py-1.5! max-md:gap-y-1.5!">
           {/* Left: Brand + Mode Tabs */}
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="brand-cluster">
+          <div className="flex items-center gap-3 max-sm:gap-2 min-w-0 md:shrink-0 max-md:w-full max-md:justify-between">
+            <div className="brand-cluster overflow-hidden shrink-0">
               <div className="aperture-mark" aria-hidden="true">
                 <Aperture size={15} strokeWidth={1.9} />
               </div>
               <h1 className="brand-title">
                 <span>collima</span>
-                <span className="hidden md:inline text-xs font-normal text-[var(--text-muted)] tracking-normal">
+                <span className="hidden xl:inline text-xs font-normal text-[var(--text-muted)] tracking-normal">
                   {t.brandSubtitle}
                 </span>
               </h1>
             </div>
 
-            <span className="brand-divider hidden sm:block" />
+            <span className="brand-divider hidden sm:block max-sm:hidden!" />
 
-            <nav aria-label={t.navAriaLabel} className="segmented-control">
+            <nav
+              aria-label={t.navAriaLabel}
+              className="segmented-control min-w-0"
+            >
               <button
                 id="tab-tilt-inspector"
                 type="button"
                 onClick={() => setMode('tilt')}
-                className={`segmented-btn ${mode === 'tilt' ? 'is-active' : ''}`}
+                className={`segmented-btn max-sm:px-2! ${mode === 'tilt' ? 'is-active' : ''}`}
               >
-                <Aperture size={13} className="mode-indicator" />
-                <span>{t.tabTiltLabel}</span>
-                <span className="kbd-hint hidden sm:inline-flex">1</span>
+                <Aperture size={13} className="mode-indicator shrink-0" />
+                <span className="truncate">{t.tabTiltLabel}</span>
+                <span className="kbd-hint max-lg:hidden!">1</span>
               </button>
               <button
                 id="tab-sensor-noise-lab"
                 type="button"
                 onClick={() => setMode('noise')}
-                className={`segmented-btn ${mode === 'noise' ? 'is-active' : ''}`}
+                className={`segmented-btn max-sm:px-2! ${mode === 'noise' ? 'is-active' : ''}`}
               >
-                <FlaskConical size={13} className="mode-indicator" />
-                <span>{t.tabNoiseLabel}</span>
-                <span className="kbd-hint hidden sm:inline-flex">2</span>
+                <FlaskConical size={13} className="mode-indicator shrink-0" />
+                <span className="truncate">{t.tabNoiseLabel}</span>
+                <span className="kbd-hint max-lg:hidden!">2</span>
               </button>
             </nav>
           </div>
@@ -508,18 +512,20 @@ export const App: React.FC = () => {
           )}
 
           {/* Right: Contextual Actions, Presets, Theme & Locale */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 max-md:w-full max-md:justify-end max-md:flex-wrap">
             {hasActiveView && (
-              <div ref={presetMenuRef} className="popover-anchor">
+              <div ref={presetMenuRef} className="popover-anchor max-sm:hidden!">
                 <button
                   id="btn-presets-menu"
                   type="button"
                   disabled={isBusy}
+                  aria-label={t.presetsMenuLabel}
+                  title={t.presetsMenuLabel}
                   onClick={() => setPresetMenuOpen((v) => !v)}
-                  className="btn-instrument hidden sm:inline-flex"
+                  className="btn-instrument max-sm:hidden!"
                 >
                   <Sparkles size={12} className="text-[var(--accent-amber)]" />
-                  <span>{t.presetsMenuLabel}</span>
+                  <span className="hidden lg:inline">{t.presetsMenuLabel}</span>
                   <ChevronDown size={11} className="text-[var(--text-muted)]" />
                 </button>
 
@@ -599,11 +605,13 @@ export const App: React.FC = () => {
                   id="btn-switch-tilt-preset"
                   type="button"
                   disabled={isBusy}
+                  aria-label={t.btnBackToBench}
+                  title={t.btnBackToBench}
                   onClick={handleCloseTiltSession}
                   className="btn-instrument"
                 >
                   <X size={12} className="text-[var(--text-muted)]" />
-                  <span className="hidden sm:inline">{t.btnBackToBench}</span>
+                  <span className="hidden lg:inline">{t.btnBackToBench}</span>
                 </button>
                 <DropZone
                   mode="tilt"
@@ -643,6 +651,20 @@ export const App: React.FC = () => {
             </button>
 
             <LanguageSwitcher />
+
+            <a
+              id="link-github-source"
+              href="https://github.com/h-void/collima"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={t.githubSourceAriaLabel}
+              title={t.githubSourceAriaLabel}
+              className="btn-instrument no-underline"
+            >
+              <span className="hidden lg:inline">{t.githubSourceLabel}</span>
+              <span className="lg:hidden">GitHub</span>
+              <ArrowUpRight size={12} className="text-[var(--text-muted)]" />
+            </a>
           </div>
         </div>
 
