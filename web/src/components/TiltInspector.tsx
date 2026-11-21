@@ -214,7 +214,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
       }
 
       if (validNodes.length >= 3) {
-        const hmW = 120;
+        const hmW = Math.min(ow, 360);
         const hmH = Math.max(60, Math.round((oh / ow) * hmW));
         const hmCanvas = document.createElement('canvas');
         hmCanvas.width = hmW;
@@ -316,6 +316,9 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     // 3. Draw 9 ROI station boxes on overview (with active selection ring)
     const aw = Math.max(1, session.metadata.activeWidth);
     const ah = Math.max(1, session.metadata.activeHeight);
+    // Canvas pixels per CSS pixel: keeps strokes/labels legible regardless of
+    // how far the full-resolution overview is scaled down inside the dock.
+    const cssPx = Math.max(1, ow / Math.max(1, canvas.clientWidth || ow));
 
     ctx.save();
     session.sharpness.grid3x3.forEach((cell, idx) => {
@@ -331,9 +334,9 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
       const isSelected = idx === selectedStationIdx;
 
       if (isSelected) {
-        const pad = Math.max(3, ow / 340);
+        const pad = Math.max(3, 2.5 * cssPx);
         ctx.strokeStyle = 'hsla(0, 0%, 100%, 0.9)';
-        ctx.lineWidth = Math.max(1.5, ow / 560);
+        ctx.lineWidth = Math.max(1.5, 1.25 * cssPx);
         ctx.strokeRect(bx - pad, by - pad, boxW + pad * 2, boxH + pad * 2);
       }
 
@@ -349,23 +352,26 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               : safeRel >= 0.48
                 ? 'hsl(36, 88%, 60%)'
                 : 'hsl(4, 84%, 64%)';
-      ctx.lineWidth = Math.max(1.5, ow / 500);
+      ctx.lineWidth = Math.max(1.5, 1.25 * cssPx);
       ctx.strokeRect(bx, by, boxW, boxH);
 
-      // Station label tag
-      const fontSize = Math.max(11, Math.round(ow / 78));
+      // Station label tag (~9.5 CSS px regardless of overview scale)
+      const fontSize = Math.max(11, Math.round(9.5 * cssPx));
       ctx.font = `600 ${fontSize}px "JetBrains Mono", monospace`;
       const label = stationValid
         ? `${cell.id} ${Math.round(safeRel * 100)}%`
         : `${cell.id} --`;
-      const tw = ctx.measureText(label).width + 8;
-      const th = fontSize + 6;
+      const padX = Math.max(4, 3 * cssPx);
+      const tw = ctx.measureText(label).width + padX * 2;
+      const th = Math.round(fontSize * 1.45);
+      const ty = Math.max(0, by - th);
       ctx.fillStyle = isSelected
         ? 'hsla(220, 18%, 10%, 0.94)'
         : 'hsla(220, 20%, 6%, 0.84)';
-      ctx.fillRect(bx, Math.max(0, by - th), tw, th);
+      ctx.fillRect(bx, ty, tw, th);
       ctx.fillStyle = '#f8fafc';
-      ctx.fillText(label, bx + 4, Math.max(fontSize, by - 4));
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, bx + padX, ty + th / 2);
     });
     ctx.restore();
   }, [

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   AlertTriangle,
@@ -114,6 +114,20 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
   const [channelView, setChannelView] = useState<ChannelView>('mean');
   const [noiseAxisMode, setNoiseAxisMode] = useState<NoiseAxisMode>('raw_adu');
   const [selectedFrameKey, setSelectedFrameKey] = useState<string | null>(null);
+  const chartBoxRef = useRef<HTMLDivElement | null>(null);
+  const [chartBoxW, setChartBoxW] = useState<number>(880);
+
+  // Narrow the SVG viewBox on small screens so axis text is not scaled to ~4px
+  useEffect(() => {
+    const el = chartBoxRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      if (w > 0) setChartBoxW(Math.round(w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const frames = series.frames;
   const safeSelectedIdx = useMemo(() => {
@@ -185,7 +199,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
 
   // Compute SVG chart geometry, per-ISO aggregated curve buckets & duplicate-ISO node offsets
   const chartGeom = useMemo(() => {
-    const W = 880;
+    const W = Math.max(440, Math.min(880, chartBoxW));
     const H = 356;
     const padL = 62;
     const padR = 62;
@@ -339,6 +353,18 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       indices: bucketMap.get(iso) ?? [],
     }));
 
+    // Greedy left-to-right ISO tick label culling to avoid overlapping text
+    const isoLabelHidden = new Set<number>();
+    let lastLabelX = -Infinity;
+    for (const iso of uniqueIsos) {
+      const x = xOfIso(iso);
+      if (x - lastLabelX < 30) {
+        isoLabelHidden.add(iso);
+      } else {
+        lastLabelX = x;
+      }
+    }
+
     return {
       W,
       H,
@@ -354,10 +380,11 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       noiseTicks,
       drTicks,
       uniqueIsos,
+      isoLabelHidden,
       curveBuckets,
       nodeXOffsets,
     };
-  }, [frames, channelView, getFrameChannelNoise]);
+  }, [frames, channelView, getFrameChannelNoise, chartBoxW]);
 
   const handleExportJson = () => {
     const slug = series.cameraModel
@@ -499,35 +526,35 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       {/* 4-Column Sensor Metrology KPI Strip */}
       {kpis && (
         <section className="grid grid-cols-2 lg:grid-cols-4 bg-[var(--bg-panel-subtle)] border-b border-[var(--hairline-default)] divide-x divide-y lg:divide-y-0 divide-[var(--hairline-subtle)]">
-          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
             <span className="text-xs text-[var(--text-muted)]">
               {t.noise.kpiBaseNoise}
             </span>
-            <div className="text-right mono-num">
+            <div className="sm:text-right mono-num">
               <span className="text-[13.5px] font-semibold text-[var(--text-primary)]">
                 {kpis.minNoiseFrame.meanReadNoiseAdu.toFixed(3)} ADU
               </span>
-              <span className="text-[11px] text-[var(--text-muted)] ml-1.5">
+              <span className="text-[11px] text-[var(--text-muted)] ml-1.5 whitespace-nowrap">
                 @ {formatIsoText(kpis.minNoiseFrame.iso)}
               </span>
             </div>
           </div>
 
-          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
             <span className="text-xs text-[var(--text-muted)]">
               {t.noise.kpiPeakDr}
             </span>
-            <div className="text-right mono-num">
+            <div className="sm:text-right mono-num">
               <span className="text-[13.5px] font-semibold text-[var(--optical-green)]">
                 {kpis.maxDrFrame.meanEngineeringDrEv.toFixed(2)} EV
               </span>
-              <span className="text-[11px] text-[var(--text-muted)] ml-1.5">
+              <span className="text-[11px] text-[var(--text-muted)] ml-1.5 whitespace-nowrap">
                 @ {formatIsoText(kpis.maxDrFrame.iso)}
               </span>
             </div>
           </div>
 
-          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
             <span className="text-xs text-[var(--text-muted)]">
               {t.noise.kpiGainArch}
             </span>
@@ -544,7 +571,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             </span>
           </div>
 
-          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2">
+          <div className="px-4 py-2.5 flex items-baseline justify-between gap-2 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
             <span className="text-xs text-[var(--text-muted)]">
               {t.noise.kpiMeanBlDrift}
             </span>
@@ -645,7 +672,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             </div>
           </div>
 
-          <div className="p-4 flex-1 flex items-center">
+          <div ref={chartBoxRef} className="p-4 flex-1 flex items-center">
             {chartGeom && (
               <svg
                 viewBox={`0 0 ${chartGeom.W} ${chartGeom.H}`}
@@ -714,16 +741,18 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         y2={chartGeom.H - chartGeom.padB}
                         stroke="var(--chart-grid-minor)"
                       />
-                      <text
-                        x={x}
-                        y={chartGeom.H - chartGeom.padB + 19}
-                        textAnchor="middle"
-                        fontSize="10.5"
-                        fontFamily="JetBrains Mono, monospace"
-                        fill="var(--text-secondary)"
-                      >
-                        {iso > 0 ? iso : t.noise.isoUnknownShort}
-                      </text>
+                      {!chartGeom.isoLabelHidden.has(iso) && (
+                        <text
+                          x={x}
+                          y={chartGeom.H - chartGeom.padB + 19}
+                          textAnchor="middle"
+                          fontSize="10.5"
+                          fontFamily="JetBrains Mono, monospace"
+                          fill="var(--text-secondary)"
+                        >
+                          {iso > 0 ? iso : t.noise.isoUnknownShort}
+                        </text>
+                      )}
                     </g>
                   );
                 })}

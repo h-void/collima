@@ -49,7 +49,7 @@ A 100% local, cross-platform camera RAW optical and sensor metrology workbench (
 <details>
 <summary><strong>Local Build &amp; Development</strong></summary>
 
-Requires **Rust `>= 1.85`** (with `wasm32-unknown-unknown`), **`wasm-pack`**, **Node.js `>= 20`**, and optional [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for desktop packaging:
+Requires **Rust `>= 1.85`** (with `wasm32-unknown-unknown`), **`wasm-pack`**, **Node.js `>= 20.19`**, and optional [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for desktop packaging:
 
 ```bash
 cargo test --workspace          # Run Rust optical & sensor unit tests

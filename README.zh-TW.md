@@ -49,7 +49,7 @@
 <details>
 <summary><strong>本機建置與開發（點擊展開）</strong></summary>
 
-需安裝 **Rust `>= 1.85`**（含 `wasm32-unknown-unknown`）、**`wasm-pack`**、**Node.js `>= 20`**（打包桌面版另需 [Tauri v2 系統相依套件](https://v2.tauri.app/start/prerequisites/)）：
+需安裝 **Rust `>= 1.85`**（含 `wasm32-unknown-unknown`）、**`wasm-pack`**、**Node.js `>= 20.19`**（打包桌面版另需 [Tauri v2 系統相依套件](https://v2.tauri.app/start/prerequisites/)）：
 
 ```bash
 cargo test --workspace              # 執行 Rust 光學與雜訊單元測試

@@ -785,8 +785,8 @@ export const App: React.FC = () => {
             <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
               <Cpu size={11} className="text-[var(--text-muted)]" />
               <span>
-                {activeMeta.formatName} · {activeMeta.compressionName} (
-                {activeMeta.decoderEngine})
+                {activeMeta.formatName} · {activeMeta.compressionName} ·{' '}
+                {activeMeta.decoderEngine}
               </span>
               <span className="text-[var(--optical-green)]">
                 · {t.telemetryDecodeTime(activeMeta.decodeMs.toFixed(1))}
