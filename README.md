@@ -2,7 +2,7 @@
 
 **English** · [简体中文](./README.zh-CN.md) · [繁體中文](./README.zh-TW.md) · [日本語](./README.ja.md)
 
-A 100% local, cross-platform camera RAW optical and sensor metrology workbench (**Web App** + **Tauri v2 Desktop**). Powered by **Rust + WebAssembly**, all RAW files are decoded and analyzed strictly in local memory (zero uploads) with zero-latency 1:1 pixel inspection.
+A 100% local, cross-platform camera RAW optical and sensor metrology workbench (**Web App** + **Tauri v2 Desktop**). Powered by **Rust + WebAssembly**, all RAW files are decoded and analyzed strictly in local memory (zero uploads) with responsive 1:1 pixel inspection.
 
 - 🌐 **Online Workbench**: <https://h-void.github.io/collima/?lang=en> *(English · 简体中文 · 繁體中文 · 日本語)*
 - 📦 **Desktop Downloads**: [GitHub Releases](https://github.com/h-void/collima/releases) *(Windows x64/ARM64 · macOS Apple Silicon/Intel · Linux x64/ARM64)*
