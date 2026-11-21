@@ -534,7 +534,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               <span className="text-[13.5px] font-semibold text-[var(--text-primary)]">
                 {kpis.minNoiseFrame.meanReadNoiseAdu.toFixed(3)} ADU
               </span>
-              <span className="text-[11px] text-[var(--text-muted)] ml-1.5 whitespace-nowrap">
+              <span className="text-[11.5px] text-[var(--text-muted)] ml-1.5 whitespace-nowrap">
                 @ {formatIsoText(kpis.minNoiseFrame.iso)}
               </span>
             </div>
@@ -548,7 +548,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               <span className="text-[13.5px] font-semibold text-[var(--optical-green)]">
                 {kpis.maxDrFrame.meanEngineeringDrEv.toFixed(2)} EV
               </span>
-              <span className="text-[11px] text-[var(--text-muted)] ml-1.5 whitespace-nowrap">
+              <span className="text-[11.5px] text-[var(--text-muted)] ml-1.5 whitespace-nowrap">
                 @ {formatIsoText(kpis.maxDrFrame.iso)}
               </span>
             </div>
@@ -617,7 +617,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
               </div>
 
               {/* Clean Curve Legend */}
-              <div className="hidden sm:flex items-center gap-3 text-[11px] text-[var(--text-muted)]">
+              <div className="hidden sm:flex items-center gap-3 text-[11.5px] text-[var(--text-muted)]">
                 <span className="inline-flex items-center gap-1.5">
                   <span
                     className="w-3.5 h-[2px] rounded-full"
@@ -1168,9 +1168,9 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         <text
                           x={4}
                           y={89}
-                          fontSize="8.5"
+                          fontSize="9.5"
                           fontFamily="JetBrains Mono, monospace"
-                          fill="hsl(215, 10%, 56%)"
+                          fill="hsl(215, 10%, 66%)"
                         >
                           {minAdu} ADU
                         </text>
@@ -1178,9 +1178,9 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                           x={316}
                           y={89}
                           textAnchor="end"
-                          fontSize="8.5"
+                          fontSize="9.5"
                           fontFamily="JetBrains Mono, monospace"
-                          fill="hsl(215, 10%, 56%)"
+                          fill="hsl(215, 10%, 66%)"
                         >
                           {maxAdu} ADU
                         </text>

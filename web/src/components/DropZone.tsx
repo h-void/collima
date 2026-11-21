@@ -272,7 +272,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                         <div className="text-xs font-medium text-[var(--text-primary)] truncate">
                           {t.dropzone.btnSynthTiltChart}
                         </div>
-                        <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                        <div className="text-[11.5px] text-[var(--text-muted)] mono-num truncate mt-0.5">
                           {t.dropzone.synthTiltChartMeta}
                         </div>
                       </div>
@@ -299,7 +299,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                         <div className="text-xs font-medium text-[var(--text-primary)] truncate">
                           {t.dropzone.btnSynthAstro}
                         </div>
-                        <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                        <div className="text-[11.5px] text-[var(--text-muted)] mono-num truncate mt-0.5">
                           {t.dropzone.synthAstroMeta}
                         </div>
                       </div>
@@ -326,7 +326,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                         <div className="text-xs font-medium text-[var(--text-primary)] truncate">
                           {t.dropzone.btnSynthFlatRef}
                         </div>
-                        <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                        <div className="text-[11.5px] text-[var(--text-muted)] mono-num truncate mt-0.5">
                           {t.dropzone.synthFlatRefMeta}
                         </div>
                       </div>
@@ -356,7 +356,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                       <div className="text-xs font-medium text-[var(--text-primary)] truncate">
                         {t.dropzone.btnSynthIsoSeries}
                       </div>
-                      <div className="text-[11px] text-[var(--text-muted)] mono-num truncate mt-0.5">
+                      <div className="text-[11.5px] text-[var(--text-muted)] mono-num truncate mt-0.5">
                         {t.dropzone.synthIsoSeriesMeta}
                       </div>
                     </div>
@@ -379,7 +379,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
                   key={idx}
                   className="flex items-start gap-2.5 text-[11.5px] text-[var(--text-secondary)] leading-snug"
                 >
-                  <span className="mono-num text-[10.5px] text-[var(--text-muted)] pt-0.5 shrink-0">
+                  <span className="mono-num text-[11.5px] text-[var(--text-muted)] pt-0.5 shrink-0">
                     0{idx + 1}
                   </span>
                   <span>{item}</span>

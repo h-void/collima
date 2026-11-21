@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Crosshair,
   Eye,
   Move,
@@ -82,8 +85,40 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
   const [dragMode, setDragMode] = useState<'sync_pan' | 'relocate_roi'>('sync_pan');
   const [panPx, setPanPx] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [selectedStationIdx, setSelectedStationIdx] = useState<number>(4);
+  const [isCompactGrid, setIsCompactGrid] = useState<boolean>(() =>
+    typeof window !== 'undefined'
+      ? window.matchMedia('(max-width: 760px)').matches
+      : false,
+  );
+  const [focusedStationIdx, setFocusedStationIdx] = useState<number | null>(
+    null,
+  );
   const [evDraft, setEvDraft] = useState<number | null>(null);
   const displayEv = evDraft ?? session.evBoost;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(max-width: 760px)');
+    const onChange = (e: MediaQueryListEvent) => {
+      setIsCompactGrid(e.matches);
+      if (!e.matches) {
+        setFocusedStationIdx(null);
+      }
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  useEffect(() => {
+    if (focusedStationIdx === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setFocusedStationIdx(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [focusedStationIdx]);
 
   const commitEvDraft = useCallback(() => {
     if (evDraft !== null) {
@@ -97,6 +132,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
 
   const overviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const loupeCanvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const focusedCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Pre-build ImageData objects for the 9 patches so pan/zoom redraws are instant (<0.3ms)
   const patchImageDatas = useMemo(() => {
@@ -107,14 +143,17 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     });
   }, [session.patches]);
 
-  // Draw all 9 synchronized nearest-neighbor loupe canvases
+  // Draw synchronized nearest-neighbor loupe canvas(es) (9-zone matrix or mobile single-loupe focus)
   useEffect(() => {
     const offscreen = document.createElement('canvas');
 
-    session.patches.forEach((patch, idx) => {
-      const canvas = loupeCanvasRefs.current[idx];
+    const renderPatchToCanvas = (
+      canvas: HTMLCanvasElement | null,
+      idx: number,
+    ) => {
+      const patch = session.patches[idx];
       const imgData = patchImageDatas[idx];
-      if (!canvas || !imgData) return;
+      if (!canvas || !patch || !imgData) return;
 
       const pw = patch.desc.width;
       const ph = patch.desc.height;
@@ -168,8 +207,24 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         ctx.lineTo(cx, cy + 16);
         ctx.stroke();
       }
-    });
-  }, [session.patches, patchImageDatas, zoom, panPx, showReticle]);
+    };
+
+    if (isCompactGrid && focusedStationIdx !== null) {
+      renderPatchToCanvas(focusedCanvasRef.current, focusedStationIdx);
+    } else {
+      session.patches.forEach((_, idx) => {
+        renderPatchToCanvas(loupeCanvasRefs.current[idx], idx);
+      });
+    }
+  }, [
+    session.patches,
+    patchImageDatas,
+    zoom,
+    panPx,
+    showReticle,
+    isCompactGrid,
+    focusedStationIdx,
+  ]);
 
   // Draw Overview Canvas + 5x5 Contour Heatmap Overlay + 9 Interactive ROI Station Boxes
   useEffect(() => {
@@ -293,13 +348,13 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                 hmData.data[p] = 248;
                 hmData.data[p + 1] = 250;
                 hmData.data[p + 2] = 252;
-                hmData.data[p + 3] = 190;
+                hmData.data[p + 3] = 178;
               } else {
                 const [r, g, b] = heatmapColor(val);
                 hmData.data[p] = r;
                 hmData.data[p + 1] = g;
                 hmData.data[p + 2] = b;
-                hmData.data[p + 3] = 108;
+                hmData.data[p + 3] = 88;
               }
             }
           }
@@ -584,6 +639,61 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     .filter(Boolean)
     .join(' · ');
 
+  const getCellPresentation = (cell: GridCellMetrics, idx: number) => {
+    const isCenter = idx === 4;
+    const safeRel = Number.isFinite(cell.relativeToCenter)
+      ? cell.relativeToCenter
+      : 0;
+    const retPct = Math.round(safeRel * 100);
+    const retColor = isCenter
+      ? cell.validity === 'valid'
+        ? 'hsl(36, 92%, 64%)'
+        : 'hsl(4, 86%, 70%)'
+      : cell.validity !== 'valid' || !centerIsValid
+        ? 'hsl(215, 10%, 66%)'
+        : retPct >= 75
+          ? 'hsl(154, 72%, 60%)'
+          : retPct >= 50
+            ? 'hsl(36, 92%, 64%)'
+            : 'hsl(4, 86%, 70%)';
+
+    const fullRetLabel = isCenter
+      ? cell.validity === 'valid'
+        ? t.tilt.hudCenterRef
+        : t.tilt.hudCenterInvalid(t.tilt.validities[cell.validity])
+      : cell.validity !== 'valid'
+        ? t.tilt.validities[cell.validity]
+        : !centerIsValid
+          ? t.tilt.hudInvalidRef
+          : t.tilt.hudRetention(retPct);
+
+    const compactRetLabel = isCenter
+      ? cell.validity === 'valid'
+        ? '100%'
+        : t.tilt.validities[cell.validity]
+      : cell.validity !== 'valid'
+        ? t.tilt.validities[cell.validity]
+        : !centerIsValid
+          ? '--'
+          : t.tilt.hudRetention(retPct);
+
+    return { isCenter, retColor, fullRetLabel, compactRetLabel };
+  };
+
+  const focusedCell =
+    isCompactGrid && focusedStationIdx !== null
+      ? (sharpness.grid3x3[focusedStationIdx] ?? null)
+      : null;
+
+  const stepFocusedStation = (delta: number) => {
+    const total = sharpness.grid3x3.length;
+    if (total === 0) return;
+    const current = focusedStationIdx ?? selectedStationIdx;
+    const next = (current + delta + total) % total;
+    setSelectedStationIdx(next);
+    setFocusedStationIdx(next);
+  };
+
   return (
     <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_396px]">
       {/* Left Primary Stage: 9-Zone 1:1 Synchronized Pixel Loupe */}
@@ -591,6 +701,35 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
         aria-label={t.tilt.sectionLoupeAria}
         className="flex flex-col min-h-0 min-w-0"
       >
+        {/* Mobile Verdict-First Summary Banner (shown <= 760px above the 3x3 loupe grid) */}
+        <div
+          id="mobile-verdict-banner"
+          className="mobile-verdict-banner space-y-1.5"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="section-eyebrow">{t.tilt.verdictHeader}</span>
+            <span className={gradeBadgeClass}>
+              {t.tilt.grades[sharpness.grade]}
+            </span>
+          </div>
+          <div className="text-[13.5px] font-semibold text-[var(--text-primary)] leading-snug">
+            {localizedDiag.verdictTitle}
+          </div>
+          <div className="flex items-center justify-between gap-2 text-[11.5px] text-[var(--text-muted)] mono-num">
+            <span className="min-w-0 truncate">
+              {session.filename}
+              {exposureSummary ? ` · ${exposureSummary}` : ''}
+            </span>
+            <span className="shrink-0 text-[var(--text-secondary)]">
+              Tilt{' '}
+              <strong className="font-semibold text-[var(--text-primary)]">
+                {tv.magnitude.toFixed(3)}
+              </strong>{' '}
+              · {localizedDiag.collapseDirectionLabel}
+            </span>
+          </div>
+        </div>
+
         {/* Unified Single-Row Precision Viewport Toolbar */}
         <div className="viewport-toolbar">
           <div className="flex items-center gap-2 flex-wrap">
@@ -680,7 +819,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               <Sliders size={12} className="text-[var(--text-muted)]" />
               <label
                 htmlFor="slider-ev-boost"
-                className="text-[11px] text-[var(--text-secondary)] select-none"
+                className="text-[11.5px] text-[var(--text-secondary)] select-none"
               >
                 {t.tilt.evBoostLabel}
               </label>
@@ -710,7 +849,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
                     onUpdateRenderParams(0, session.patchMode);
                   }
                 }}
-                className="mono-num text-[11px] w-14 text-right text-[var(--text-primary)] hover:text-[var(--accent-amber)] cursor-pointer bg-transparent border-none p-0"
+                className="mono-num text-[11.5px] w-14 text-right text-[var(--text-primary)] hover:text-[var(--accent-amber)] cursor-pointer bg-transparent border-none p-0 rounded-[2px]"
               >
                 {displayEv >= 0
                   ? `+${displayEv.toFixed(2)}`
@@ -745,116 +884,288 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           </div>
         </div>
 
-        {/* 3x3 Synchronized 1:1 Sensor Loupe Canvas Stage */}
+        {/* 3x3 Synchronized 1:1 Sensor Loupe Canvas Stage (or Mobile Single-Loupe Focus View) */}
         <div className="loupe-stage-wrap">
-          <div className="loupe-matrix">
-            {sharpness.grid3x3.map((cell, idx) => {
-              const isCenter = idx === 4;
-              const isSelected = idx === selectedStationIdx;
-              const safeRel = Number.isFinite(cell.relativeToCenter)
-                ? cell.relativeToCenter
-                : 0;
-              const retPct = Math.round(safeRel * 100);
-              const retColor = isCenter
-                ? cell.validity === 'valid'
-                  ? 'hsl(36, 92%, 64%)'
-                  : 'hsl(4, 86%, 70%)'
-                : cell.validity !== 'valid' || !centerIsValid
-                  ? 'hsl(215, 10%, 62%)'
-                  : retPct >= 75
-                    ? 'hsl(154, 72%, 60%)'
-                    : retPct >= 50
-                      ? 'hsl(36, 92%, 64%)'
-                      : 'hsl(4, 86%, 70%)';
-
+          {focusedCell && focusedStationIdx !== null ? (
+            (() => {
+              const { isCenter, retColor, fullRetLabel } = getCellPresentation(
+                focusedCell,
+                focusedStationIdx,
+              );
               return (
-                <div
-                  key={cell.id}
-                  id={`loupe-station-${cell.id}`}
-                  className={`loupe-cell ${isCenter ? 'is-center' : ''} ${
-                    isSelected ? 'is-selected' : ''
-                  }`}
-                >
-                  <canvas
-                    ref={(el) => {
-                      loupeCanvasRefs.current[idx] = el;
-                    }}
-                    onPointerDown={(e) => handleLoupePointerDown(idx, cell, e)}
-                    onPointerMove={handleLoupePointerMove}
-                    onPointerUp={handleLoupePointerUp}
-                    onPointerCancel={handleLoupePointerCancel}
-                    onDoubleClick={handleLoupeDoubleClick}
-                    className={`loupe-canvas ${
-                      dragMode === 'relocate_roi'
-                        ? 'cursor-move'
-                        : zoom > 1
-                          ? 'cursor-grab active:cursor-grabbing'
-                          : 'cursor-crosshair'
-                    }`}
-                  />
+                <div id="loupe-focus-panel" className="loupe-focus-panel">
+                  <div className="loupe-focus-header">
+                    <button
+                      id="btn-close-loupe-focus"
+                      type="button"
+                      onClick={() => setFocusedStationIdx(null)}
+                      className="btn-instrument"
+                    >
+                      <ArrowLeft size={13} />
+                      <span>{t.tilt.mobileBackToGrid}</span>
+                    </button>
 
-                  {/* Top Micro-HUD */}
-                  <div className="loupe-hud-top">
-                    <div className="flex items-center gap-1">
-                      <span className="loupe-pill mono-num font-semibold">
-                        {cell.id}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="status-tag font-semibold">
+                        {focusedCell.id}
                       </span>
-                      {cell.medianStarHfrPx !== null &&
-                        Number.isFinite(cell.medianStarHfrPx) &&
-                        cell.starCount > 0 && (
-                          <span
-                            className="loupe-pill mono-num"
-                            style={{ color: 'hsl(204, 90%, 68%)' }}
-                          >
-                            HFR {cell.medianStarHfrPx.toFixed(2)}px
-                          </span>
-                        )}
+                      <span
+                        className="status-tag font-semibold"
+                        style={{ color: retColor }}
+                      >
+                        {fullRetLabel}
+                      </span>
                     </div>
 
-                    <span
-                      className="loupe-pill mono-num font-semibold"
-                      style={{ color: retColor }}
-                    >
-                      {isCenter
-                        ? cell.validity === 'valid'
-                          ? t.tilt.hudCenterRef
-                          : t.tilt.hudCenterInvalid(
-                              t.tilt.validities[cell.validity],
-                            )
-                        : cell.validity !== 'valid'
-                          ? t.tilt.validities[cell.validity]
-                          : !centerIsValid
-                            ? t.tilt.hudInvalidRef
-                            : t.tilt.hudRetention(retPct)}
-                    </span>
+                    <div className="inline-flex items-center gap-1 shrink-0">
+                      <button
+                        id="btn-focus-prev-station"
+                        type="button"
+                        aria-label={t.tilt.mobilePrevStationAria}
+                        onClick={() => stepFocusedStation(-1)}
+                        className="btn-instrument btn-icon-only"
+                      >
+                        <ChevronLeft size={13} />
+                      </button>
+                      <button
+                        id="btn-focus-next-station"
+                        type="button"
+                        aria-label={t.tilt.mobileNextStationAria}
+                        onClick={() => stepFocusedStation(1)}
+                        className="btn-instrument btn-icon-only"
+                      >
+                        <ChevronRight size={13} />
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Bottom Micro-HUD */}
-                  <div className="loupe-hud-bottom mono-num">
-                    <span>S {cell.sharpness.toFixed(4)}</span>
-                    <span>
-                      {cell.sensorRect[0]},{cell.sensorRect[1]}
-                    </span>
+                  <div
+                    className={`loupe-cell loupe-focus-cell ${
+                      isCenter ? 'is-center' : ''
+                    } is-selected`}
+                  >
+                    <canvas
+                      id="focused-loupe-canvas"
+                      ref={focusedCanvasRef}
+                      onPointerDown={(e) =>
+                        handleLoupePointerDown(
+                          focusedStationIdx,
+                          focusedCell,
+                          e,
+                        )
+                      }
+                      onPointerMove={handleLoupePointerMove}
+                      onPointerUp={handleLoupePointerUp}
+                      onPointerCancel={handleLoupePointerCancel}
+                      onDoubleClick={handleLoupeDoubleClick}
+                      className={`loupe-canvas ${
+                        dragMode === 'relocate_roi'
+                          ? 'cursor-move'
+                          : zoom > 1
+                            ? 'cursor-grab active:cursor-grabbing'
+                            : 'cursor-crosshair'
+                      }`}
+                    />
+
+                    {/* Full Top HUD */}
+                    <div className="loupe-hud-top">
+                      <div className="flex items-center gap-1">
+                        <span className="loupe-pill mono-num font-semibold">
+                          {focusedCell.id}
+                        </span>
+                        {focusedCell.medianStarHfrPx !== null &&
+                          Number.isFinite(focusedCell.medianStarHfrPx) &&
+                          focusedCell.starCount > 0 && (
+                            <span
+                              className="loupe-pill mono-num"
+                              style={{ color: 'hsl(204, 90%, 68%)' }}
+                            >
+                              HFR {focusedCell.medianStarHfrPx.toFixed(2)}px
+                            </span>
+                          )}
+                      </div>
+
+                      <span
+                        className="loupe-pill mono-num font-semibold"
+                        style={{ color: retColor }}
+                      >
+                        {fullRetLabel}
+                      </span>
+                    </div>
+
+                    {/* Full Bottom HUD */}
+                    <div className="loupe-hud-bottom mono-num">
+                      <span>S {focusedCell.sharpness.toFixed(4)}</span>
+                      <span>
+                        {focusedCell.sensorRect[0]},{focusedCell.sensorRect[1]}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Full Station Sharpness & HFR Telemetry Strip */}
+                  <div className="loupe-focus-metrics divide-y divide-[var(--hairline-subtle)]">
+                    <div className="kv-row">
+                      <span className="text-[var(--text-muted)]">
+                        {t.tilt.metricG1G2}
+                      </span>
+                      <span className="mono-num text-[var(--text-primary)]">
+                        {focusedCell.sharpnessG1.toFixed(4)} /{' '}
+                        {focusedCell.sharpnessG2.toFixed(4)}
+                      </span>
+                    </div>
+                    <div className="kv-row">
+                      <span className="text-[var(--text-muted)]">
+                        {t.tilt.metricStarHfr}
+                      </span>
+                      <span className="mono-num text-[var(--text-secondary)]">
+                        {focusedCell.starCount > 0 &&
+                        focusedCell.medianStarHfrPx !== null
+                          ? `${focusedCell.starCount} · ${focusedCell.medianStarHfrPx.toFixed(2)} px`
+                          : '—'}
+                      </span>
+                    </div>
+                    <div className="kv-row">
+                      <span className="text-[var(--text-muted)]">
+                        {t.tilt.metricSignalClip}
+                      </span>
+                      <span className="mono-num text-[var(--text-secondary)]">
+                        {(focusedCell.meanSignalNorm * 100).toFixed(1)}% /{' '}
+                        {(focusedCell.clippedFraction * 100).toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="kv-row">
+                      <span className="text-[var(--text-muted)]">
+                        {t.tilt.mobileCoordsLabel}
+                      </span>
+                      <span className="mono-num text-[var(--text-secondary)]">
+                        {focusedCell.sensorRect[0]}, {focusedCell.sensorRect[1]}{' '}
+                        ({focusedCell.sensorRect[2]}×{focusedCell.sensorRect[3]}
+                        )
+                      </span>
+                    </div>
                   </div>
                 </div>
               );
-            })}
-          </div>
+            })()
+          ) : (
+            <div className="loupe-matrix">
+              {sharpness.grid3x3.map((cell, idx) => {
+                const isSelected = idx === selectedStationIdx;
+                const { isCenter, retColor, fullRetLabel, compactRetLabel } =
+                  getCellPresentation(cell, idx);
+
+                return (
+                  <div
+                    key={cell.id}
+                    id={`loupe-station-${cell.id}`}
+                    className={`loupe-cell ${isCenter ? 'is-center' : ''} ${
+                      isSelected ? 'is-selected' : ''
+                    }`}
+                  >
+                    <canvas
+                      ref={(el) => {
+                        loupeCanvasRefs.current[idx] = el;
+                      }}
+                      onPointerDown={
+                        isCompactGrid
+                          ? undefined
+                          : (e) => handleLoupePointerDown(idx, cell, e)
+                      }
+                      onPointerMove={
+                        isCompactGrid ? undefined : handleLoupePointerMove
+                      }
+                      onPointerUp={
+                        isCompactGrid ? undefined : handleLoupePointerUp
+                      }
+                      onPointerCancel={
+                        isCompactGrid ? undefined : handleLoupePointerCancel
+                      }
+                      onDoubleClick={
+                        isCompactGrid ? undefined : handleLoupeDoubleClick
+                      }
+                      className={`loupe-canvas ${
+                        isCompactGrid
+                          ? 'cursor-zoom-in'
+                          : dragMode === 'relocate_roi'
+                            ? 'cursor-move'
+                            : zoom > 1
+                              ? 'cursor-grab active:cursor-grabbing'
+                              : 'cursor-crosshair'
+                      }`}
+                    />
+
+                    {isCompactGrid && (
+                      <button
+                        type="button"
+                        className="loupe-focus-trigger"
+                        aria-label={t.tilt.mobileInspectTileAria(cell.id)}
+                        onClick={() => {
+                          setSelectedStationIdx(idx);
+                          setFocusedStationIdx(idx);
+                        }}
+                      />
+                    )}
+
+                    {/* Top Micro-HUD */}
+                    <div className="loupe-hud-top">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className="loupe-pill mono-num font-semibold shrink-0">
+                          {cell.id}
+                        </span>
+                        {cell.medianStarHfrPx !== null &&
+                          Number.isFinite(cell.medianStarHfrPx) &&
+                          cell.starCount > 0 && (
+                            <span
+                              className="loupe-pill loupe-hfr-pill mono-num"
+                              style={{ color: 'hsl(204, 90%, 68%)' }}
+                            >
+                              HFR {cell.medianStarHfrPx.toFixed(2)}px
+                            </span>
+                          )}
+                      </div>
+
+                      <span
+                        className="loupe-pill mono-num font-semibold"
+                        style={{ color: retColor }}
+                      >
+                        <span className="loupe-ret-full">{fullRetLabel}</span>
+                        <span className="loupe-ret-compact">
+                          {compactRetLabel}
+                        </span>
+                      </span>
+                    </div>
+
+                    {/* Bottom Micro-HUD (desktop & expanded focus view) */}
+                    <div className="loupe-hud-bottom mono-num">
+                      <span>S {cell.sharpness.toFixed(4)}</span>
+                      <span>
+                        {cell.sensorRect[0]},{cell.sensorRect[1]}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Stage Hint Bar */}
-        <div className="px-3.5 py-1.5 bg-[var(--bg-panel)] border-t border-[var(--hairline-default)] flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-muted)] shrink-0">
-          <span>{t.tilt.loupeHint}</span>
+        <div className="px-3.5 py-1.5 bg-[var(--bg-panel)] border-t border-[var(--hairline-default)] flex flex-wrap items-center justify-between gap-2 text-[11.5px] text-[var(--text-muted)] shrink-0">
+          <span>
+            {isCompactGrid && focusedStationIdx === null
+              ? t.tilt.mobileLoupeHint
+              : t.tilt.loupeHint}
+          </span>
           <span className="mono-num">{t.tilt.nearestNeighborBadge}</span>
         </div>
       </section>
 
       {/* Right Docked Optical Inspector */}
       <aside className="inspector-dock border-t xl:border-t-0 xl:border-l border-[var(--hairline-default)] xl:overflow-y-auto xl:h-full">
-        {/* Section 1: Verdict & Optic Summary */}
+        {/* Section 1: Verdict & Optic Summary (desktop/wide; mobile renders above 3x3 grid) */}
         <section
           aria-label={t.tilt.collimationSectionAria}
-          className="inspector-section space-y-2"
+          className="inspector-section desktop-verdict-section space-y-2"
         >
           <div className="flex items-center justify-between gap-2">
             <span className="section-eyebrow">{t.tilt.verdictHeader}</span>
@@ -865,7 +1176,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
           <div className="text-[13.5px] font-semibold text-[var(--text-primary)] leading-snug">
             {localizedDiag.verdictTitle}
           </div>
-          <div className="text-[11px] text-[var(--text-muted)] mono-num truncate">
+          <div className="text-[11.5px] text-[var(--text-muted)] mono-num truncate">
             {session.filename}
             {exposureSummary ? ` · ${exposureSummary}` : ''}
           </div>
@@ -883,7 +1194,11 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               type="button"
               onClick={() => setShowHeatmap((v) => !v)}
               className={`btn-instrument ${showHeatmap ? 'is-toggled' : ''}`}
-              style={{ height: '22px', padding: '0 0.5rem', fontSize: '0.7rem' }}
+              style={{
+                height: '24px',
+                padding: '0 0.52rem',
+                fontSize: '0.72rem',
+              }}
             >
               {showHeatmap ? t.tilt.btnHideHeatmap : t.tilt.btnShowHeatmap}
             </button>
@@ -900,16 +1215,21 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
             />
           </div>
 
-          <div className="flex items-center justify-between text-[10.5px] text-[var(--text-muted)] mono-num">
-            <span>{t.tilt.legendCollapse}</span>
-            <div
-              className="h-1.5 flex-1 mx-2.5 rounded-full"
-              style={{
-                background:
-                  'linear-gradient(90deg, rgb(180,42,58) 0%, rgb(225,90,48) 35%, rgb(70,198,116) 72%, rgb(52,230,140) 100%)',
-              }}
-            />
-            <span>{t.tilt.legendCenterPeak}</span>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[11.5px] text-[var(--text-muted)] mono-num">
+              <span>{t.tilt.legendCollapse}</span>
+              <div
+                className="h-1.5 flex-1 mx-2.5 rounded-full"
+                style={{
+                  background:
+                    'linear-gradient(90deg, rgb(180,42,58) 0%, rgb(225,90,48) 35%, rgb(70,198,116) 72%, rgb(52,230,140) 100%)',
+                }}
+              />
+              <span>{t.tilt.legendCenterPeak}</span>
+            </div>
+            <div className="text-[11px] text-[var(--text-muted)] text-right mono-num">
+              {t.tilt.legendOverPeakHint}
+            </div>
           </div>
         </section>
 

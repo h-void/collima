@@ -82,3 +82,17 @@ SOFTWARE.
 | **`react` / `react-dom`** | <https://github.com/facebook/react> | `MIT` | Copyright (c) Meta Platforms, Inc. and affiliates |
 | **`lucide-react`** | <https://github.com/lucide-icons/lucide> | `ISC` | Copyright (c) Cole Bemis and Lucide Contributors |
 | **`tailwindcss`** | <https://github.com/tailwindlabs/tailwindcss> | `MIT` | Copyright (c) Tailwind Labs, Inc. |
+| **`@fontsource/inter`** (`Inter`) | <https://github.com/rsms/inter> | `OFL-1.1` | Copyright 2016 The Inter Project Authors |
+| **`@fontsource/jetbrains-mono`** (`JetBrains Mono`) | <https://github.com/JetBrains/JetBrainsMono> | `OFL-1.1` | Copyright 2020 The JetBrains Mono Project Authors |
+
+---
+
+## 4. Bundled Typefaces (SIL Open Font License 1.1)
+
+The web and Tauri desktop distributions bundle Latin subsets of the **Inter** and **JetBrains Mono** typefaces via Fontsource for offline-capable metrology typography:
+
+- **Inter**: Copyright 2016 The Inter Project Authors (<https://github.com/rsms/inter>) — licensed under the SIL Open Font License, Version 1.1 (`OFL-1.1`).
+- **JetBrains Mono**: Copyright 2020 The JetBrains Mono Project Authors (<https://github.com/JetBrains/JetBrainsMono>) — licensed under the SIL Open Font License, Version 1.1 (`OFL-1.1`).
+
+Full license text is available at <https://scripts.sil.org/OFL> and distributed with the `@fontsource/inter` and `@fontsource/jetbrains-mono` packages.
+

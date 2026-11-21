@@ -67,14 +67,29 @@ export const App: React.FC = () => {
     total: number;
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [statusFade, setStatusFade] = useState<{
+    left: boolean;
+    right: boolean;
+  }>({ left: false, right: false });
 
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
+  const statusScrollRef = useRef<HTMLDivElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const reqIdRef = useRef<number>(1);
   const activeTiltSessionReqRef = useRef<number>(0);
   const activeTiltRenderReqRef = useRef<number>(0);
   const activeTiltStationReqRef = useRef<number>(0);
   const activeNoiseReqRef = useRef<number>(0);
+
+  const updateStatusFade = useCallback(() => {
+    const el = statusScrollRef.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setStatusFade((prev) =>
+      prev.left === left && prev.right === right ? prev : { left, right },
+    );
+  }, []);
 
   // Sync studio theme attribute
   useEffect(() => {
@@ -189,6 +204,7 @@ export const App: React.FC = () => {
             evBoost: msg.evBoost,
             patchMode: msg.patchMode,
           });
+          window.scrollTo(0, 0);
           break;
         }
         case 'RENDER_UPDATED': {
@@ -273,6 +289,7 @@ export const App: React.FC = () => {
             return;
           }
           setNoiseSeries(msg.series);
+          window.scrollTo(0, 0);
           break;
         }
         case 'ERROR': {
@@ -442,6 +459,21 @@ export const App: React.FC = () => {
   const isLockedDesktopTilt =
     mode === 'tilt' && tiltSession !== null && errorMsg === null;
 
+  useEffect(() => {
+    const el = statusScrollRef.current;
+    if (!el) return;
+    const rafId = window.requestAnimationFrame(updateStatusFade);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(updateStatusFade);
+      ro.observe(el);
+    }
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      ro?.disconnect();
+    };
+  }, [updateStatusFade, activeMeta, locale, progress, mode]);
+
   return (
     <div
       className={`workbench-shell ${
@@ -465,7 +497,7 @@ export const App: React.FC = () => {
               </h1>
             </div>
 
-            <span className="brand-divider hidden sm:block max-sm:hidden!" />
+            <span className="brand-divider hidden md:block" />
 
             <nav
               aria-label={t.navAriaLabel}
@@ -752,72 +784,80 @@ export const App: React.FC = () => {
         role="region"
         aria-label={t.telemetryRegionAria}
       >
-        <div className="flex items-center gap-3 shrink-0">
-          {progress ? (
-            <div
-              role="status"
-              aria-live="polite"
-              className="inline-flex items-center gap-1.5 text-[var(--accent-amber)] font-sans"
-            >
-              <Loader2 size={11} className="animate-spin" />
-              <span>
-                {formatWorkerProgress(
-                  progress.stage,
-                  progress.progressKey,
-                  progress.progressParams,
-                  locale,
+        <div
+          ref={statusScrollRef}
+          onScroll={updateStatusFade}
+          data-fade-left={statusFade.left ? 'true' : 'false'}
+          data-fade-right={statusFade.right ? 'true' : 'false'}
+          className="statusbar-scroll"
+        >
+          <div className="flex items-center gap-3 shrink-0">
+            {progress ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="inline-flex items-center gap-1.5 text-[var(--accent-amber)] font-sans"
+              >
+                <Loader2 size={11} className="animate-spin" />
+                <span>
+                  {formatWorkerProgress(
+                    progress.stage,
+                    progress.progressKey,
+                    progress.progressParams,
+                    locale,
+                  )}
+                </span>
+                {progress.total > 0 && (
+                  <span className="mono-num">({progressPct}%)</span>
                 )}
+              </div>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 font-sans text-[var(--text-secondary)]">
+                <span className="status-dot" />
+                <span>{t.statusReady}</span>
               </span>
-              {progress.total > 0 && (
-                <span className="mono-num">({progressPct}%)</span>
-              )}
-            </div>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 font-sans text-[var(--text-secondary)]">
-              <span className="status-dot" />
-              <span>{t.statusReady}</span>
-            </span>
-          )}
+            )}
 
-          <span className="text-[var(--hairline-strong)]">·</span>
+            <span className="text-[var(--hairline-strong)]">·</span>
 
-          {activeMeta ? (
-            <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
-              <Cpu size={11} className="text-[var(--text-muted)]" />
+            {activeMeta ? (
+              <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
+                <Cpu size={11} className="text-[var(--text-muted)]" />
+                <span>
+                  {activeMeta.formatName} · {activeMeta.compressionName} ·{' '}
+                  {activeMeta.decoderEngine}
+                </span>
+                <span className="text-[var(--optical-green)]">
+                  · {t.telemetryDecodeTime(activeMeta.decodeMs.toFixed(1))}
+                </span>
+              </span>
+            ) : (
+              <span className="font-sans">{t.footerNote}</span>
+            )}
+          </div>
+
+          {activeMeta && (
+            <div className="flex items-center gap-3 shrink-0 text-[var(--text-secondary)]">
               <span>
-                {activeMeta.formatName} · {activeMeta.compressionName} ·{' '}
-                {activeMeta.decoderEngine}
+                <span className="font-sans text-[var(--text-muted)] mr-1">
+                  {t.telemetryActiveArea}
+                </span>
+                <strong className="font-medium text-[var(--text-primary)]">
+                  {activeMeta.activeWidth}×{activeMeta.activeHeight}
+                </strong>{' '}
+                ({activeMeta.bitsPerSample}-bit {activeMeta.cfaPattern})
               </span>
-              <span className="text-[var(--optical-green)]">
-                · {t.telemetryDecodeTime(activeMeta.decodeMs.toFixed(1))}
+              <span className="text-[var(--hairline-strong)]">·</span>
+              <span>
+                <span className="text-[var(--text-muted)] mr-1">BL/WL</span>
+                <strong className="font-medium text-[var(--text-primary)]">
+                  {activeMeta.blackLevels[1].toFixed(0)} /{' '}
+                  {activeMeta.whiteLevels[1].toFixed(0)} ADU
+                </strong>
               </span>
-            </span>
-          ) : (
-            <span className="font-sans">{t.footerNote}</span>
+            </div>
           )}
         </div>
-
-        {activeMeta && (
-          <div className="flex items-center gap-3 shrink-0 text-[var(--text-secondary)]">
-            <span>
-              <span className="font-sans text-[var(--text-muted)] mr-1">
-                {t.telemetryActiveArea}
-              </span>
-              <strong className="font-medium text-[var(--text-primary)]">
-                {activeMeta.activeWidth}×{activeMeta.activeHeight}
-              </strong>{' '}
-              ({activeMeta.bitsPerSample}-bit {activeMeta.cfaPattern})
-            </span>
-            <span className="text-[var(--hairline-strong)]">·</span>
-            <span>
-              <span className="text-[var(--text-muted)] mr-1">BL/WL</span>
-              <strong className="font-medium text-[var(--text-primary)]">
-                {activeMeta.blackLevels[1].toFixed(0)} /{' '}
-                {activeMeta.whiteLevels[1].toFixed(0)} ADU
-              </strong>
-            </span>
-          </div>
-        )}
       </footer>
     </div>
   );

@@ -101,6 +101,12 @@ export interface TranslationMessages {
     hudInvalidRef: string;
     hudRetention: (pct: number) => string;
     loupeHint: string;
+    mobileLoupeHint: string;
+    mobileBackToGrid: string;
+    mobilePrevStationAria: string;
+    mobileNextStationAria: string;
+    mobileInspectTileAria: (id: string) => string;
+    mobileCoordsLabel: string;
     nearestNeighborBadge: string;
 
     overviewSectionAria: string;
@@ -109,6 +115,7 @@ export interface TranslationMessages {
     btnShowHeatmap: string;
     legendCollapse: string;
     legendCenterPeak: string;
+    legendOverPeakHint: string;
 
     collimationSectionAria: string;
     verdictHeader: string;
@@ -324,6 +331,13 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       hudRetention: (pct) => `${pct}%`,
       loupeHint:
         '拖拽视口可九窗同步平移；按住 Shift 拖拽或点击右侧热力图可单独移动局部采样窗。',
+      mobileLoupeHint:
+        '点按任意九宫格区域可放大检视 1:1 像素与完整锐度 / HFR 读数。',
+      mobileBackToGrid: '返回 3×3',
+      mobilePrevStationAria: '上一个采样窗',
+      mobileNextStationAria: '下一个采样窗',
+      mobileInspectTileAria: (id) => `放大检视 ${id} 采样窗`,
+      mobileCoordsLabel: 'ROI 坐标',
       nearestNeighborBadge: '1:1 最近邻无插值渲染',
 
       overviewSectionAria: '全画幅缩略图与 5x5 锐度等高线热力图',
@@ -332,6 +346,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       btnShowHeatmap: '热力图 关',
       legendCollapse: '塌陷 <30%',
       legendCenterPeak: '中心峰值 100%',
+      legendOverPeakHint: '>100% = 锐度高于中心',
 
       collimationSectionAria: '光轴倾斜向量与四角保持率指标',
       verdictHeader: '准直诊断结论',
@@ -542,6 +557,13 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       hudRetention: (pct) => `${pct}%`,
       loupeHint:
         '拖曳視口可九窗同步平移；按住 Shift 拖曳或點擊右側熱力圖可單獨移動局部取樣窗。',
+      mobileLoupeHint:
+        '點按任意九宮格區域可放大檢視 1:1 像素與完整銳利度 / HFR 讀數。',
+      mobileBackToGrid: '返回 3×3',
+      mobilePrevStationAria: '上一個取樣窗',
+      mobileNextStationAria: '下一個取樣窗',
+      mobileInspectTileAria: (id) => `放大檢視 ${id} 取樣窗`,
+      mobileCoordsLabel: 'ROI 座標',
       nearestNeighborBadge: '1:1 最近鄰無插值渲染',
 
       overviewSectionAria: '全片幅縮圖與 5x5 銳利度等高線熱力圖',
@@ -550,6 +572,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       btnShowHeatmap: '熱力圖 關',
       legendCollapse: '塌陷 <30%',
       legendCenterPeak: '中心峰值 100%',
+      legendOverPeakHint: '>100% = 銳利度高於中心',
 
       collimationSectionAria: '光軸傾斜向量與四角維持率指標',
       verdictHeader: '準直診斷結論',
@@ -760,6 +783,13 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       hudRetention: (pct) => `${pct}%`,
       loupeHint:
         'Drag to sync-pan all 9 loupes; Shift-drag or click the overview map to relocate a single ROI.',
+      mobileLoupeHint:
+        'Tap any tile to inspect 1:1 pixels with full HFR & sharpness readout.',
+      mobileBackToGrid: '3×3 Grid',
+      mobilePrevStationAria: 'Previous station',
+      mobileNextStationAria: 'Next station',
+      mobileInspectTileAria: (id) => `Inspect station ${id} in single-loupe view`,
+      mobileCoordsLabel: 'ROI Coords',
       nearestNeighborBadge: '1:1 Nearest-Neighbor · Zero Interpolation',
 
       overviewSectionAria: 'Full-frame overview and 5x5 sharpness contour heatmap',
@@ -768,6 +798,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       btnShowHeatmap: 'Heatmap Off',
       legendCollapse: 'Collapse <30%',
       legendCenterPeak: 'Center 100%',
+      legendOverPeakHint: '>100% = sharper than center',
 
       collimationSectionAria: 'Optical tilt vector and 4-corner retention telemetry',
       verdictHeader: 'Collimation Verdict',
@@ -978,6 +1009,13 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       hudRetention: (pct) => `${pct}%`,
       loupeHint:
         'ドラッグで9窓同期移動。Shift+ドラッグまたは全体マップクリックで個別の測定枠を移動。',
+      mobileLoupeHint:
+        '各枠をタップすると 1:1 等倍と詳細な先鋭度・HFR を拡大表示します。',
+      mobileBackToGrid: '3×3 に戻る',
+      mobilePrevStationAria: '前の測定枠',
+      mobileNextStationAria: '次の測定枠',
+      mobileInspectTileAria: (id) => `測定枠 ${id} を拡大表示`,
+      mobileCoordsLabel: 'ROI 座標',
       nearestNeighborBadge: '1:1 ニアレストネイバー無補間描画',
 
       overviewSectionAria: 'フルサイズ全体図と 5x5 先鋭度等高線ヒートマップ',
@@ -986,6 +1024,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       btnShowHeatmap: 'ヒートマップ OFF',
       legendCollapse: '低下 <30%',
       legendCenterPeak: '中央 100%',
+      legendOverPeakHint: '>100% = 中央より高先鋭',
 
       collimationSectionAria: '像面傾斜ベクトルと四隅維持率指標',
       verdictHeader: '光学診断結果',
