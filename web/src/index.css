@@ -668,6 +668,12 @@ body {
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
+@media (max-width: 760px) {
+  .loupe-cell {
+    touch-action: pan-y;
+  }
+}
+
 .loupe-cell.is-center {
   border-color: hsla(36, 84%, 56%, 0.42);
 }

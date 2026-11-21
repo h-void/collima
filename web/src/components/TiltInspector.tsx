@@ -890,7 +890,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
               onPointerDown={handleOverviewPointerDown}
               onPointerUp={handleOverviewPointerUp}
               onPointerCancel={handleOverviewPointerCancel}
-              className="w-full h-auto cursor-crosshair block"
+              className="w-full h-auto cursor-crosshair block touch-none"
             />
           </div>
 
