@@ -431,6 +431,18 @@ pub fn decode_raw_bytes(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
     decode_with_flashraw(bytes)
 }
 
+/// Effective ADC bit depth: many RAW/DNG files (incl. COLLIMA's synthetic 14-bit DNGs)
+/// store 12/14-bit samples in a 16-bit container, so `BitsPerSample` alone overstates the
+/// depth. Derive it from the white level when that is a meaningful integer code (> 255);
+/// normalised float containers (WL <= 2) keep the container value.
+fn effective_bits_per_sample(container_bits: u8, max_white_level: f32) -> u8 {
+    if !max_white_level.is_finite() || max_white_level <= 255.0 || container_bits == 0 {
+        return container_bits;
+    }
+    let implied = (max_white_level + 1.0).log2().ceil() as u8;
+    implied.clamp(8, container_bits.max(8))
+}
+
 fn sanitize_levels(mut bl: [f32; 4], mut wl: [f32; 4]) -> ([f32; 4], [f32; 4]) {
     for i in 0..4 {
         if !bl[i].is_finite() {
@@ -928,9 +940,9 @@ fn decode_with_flashraw(bytes: &[u8]) -> Result<DecodedRawImage, CollimaError> {
         .focal_length
         .filter(|v| v.is_finite() && *v > 0.0);
     let capture_time = fm.capture_time.clone();
-    let bits_per_sample = frame.bits_per_sample;
     let orientation_exif = frame.orientation.exif();
     let max_wl = frame.white_level.max().max(1) as f32;
+    let bits_per_sample = effective_bits_per_sample(frame.bits_per_sample, max_wl);
 
     // Extract u16 buffer (converting f32 if needed) with zero-copy move for U16.
     let (pixels, black_levels, white_levels): (Vec<u16>, [f32; 4], [f32; 4]) = match frame.data {
@@ -1235,4 +1247,20 @@ pub fn format_shutter_speed(sec: f64) -> String {
 
 fn now_ms() -> f64 {
     flashraw::low_level::core::profile::now_ms()
+}
+
+#[cfg(test)]
+mod bit_depth_tests {
+    use super::effective_bits_per_sample;
+
+    #[test]
+    fn container_vs_white_level() {
+        assert_eq!(effective_bits_per_sample(16, 16383.0), 14);
+        assert_eq!(effective_bits_per_sample(16, 15520.0), 14);
+        assert_eq!(effective_bits_per_sample(16, 4095.0), 12);
+        assert_eq!(effective_bits_per_sample(16, 65535.0), 16);
+        assert_eq!(effective_bits_per_sample(16, 39002.0), 16);
+        assert_eq!(effective_bits_per_sample(14, 16383.0), 14);
+        assert_eq!(effective_bits_per_sample(32, 1.0), 32);
+    }
 }
