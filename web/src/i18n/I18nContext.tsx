@@ -83,6 +83,15 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch {
       // Ignore storage quota / privacy mode errors
     }
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('lang')) {
+        url.searchParams.set('lang', next);
+        window.history.replaceState(null, '', url.toString());
+      }
+    } catch {
+      // Ignore history API restrictions
+    }
   }, []);
 
   const t = MESSAGES[locale];

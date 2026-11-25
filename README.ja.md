@@ -49,7 +49,7 @@
 <details>
 <summary><strong>ローカルビルド＆開発手順（クリックで展開）</strong></summary>
 
-**Rust `>= 1.85`**（`wasm32-unknown-unknown` 含む）・**`wasm-pack`**・**Node.js `>= 20.19`**（デスクトップ版パッケージングは [Tauri v2 依存環境](https://v2.tauri.app/start/prerequisites/) も必要）：
+**Rust `>= 1.88`**（`wasm32-unknown-unknown` 含む）・**`wasm-pack`**・**Node.js `>= 20.19`**（デスクトップ版パッケージングは [Tauri v2 依存環境](https://v2.tauri.app/start/prerequisites/) も必要）：
 
 ```bash
 cargo test --workspace              # Rust 単体テスト実行

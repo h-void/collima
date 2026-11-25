@@ -831,6 +831,68 @@ mod tests {
             "180° upright rotation of TL-tilted frame must point to Bottom-Right, got {}",
             rep3.tilt_vector.collapse_direction_label
         );
+
+        // Orientation = 7 (Transverse / anti-diagonal mirror): dimensions swap to `300 x 400`
+        // without out-of-bounds panic on non-square frames, CFA becomes `BGGR`, and Top-Left
+        // collapse `(0, 0)` maps to upright Bottom-Right `(out_w - 1, out_h - 1)`!
+        let mut dng_rot7 = synthetic::generate_tilted_chart_dng(400, 300, 0.9);
+        assert!(patch_le_tiff_tag_u32(&mut dng_rot7, 0x0112, 7));
+        let img7 = decode_raw_bytes(&dng_rot7).expect("Orientation=7 DNG decode");
+        assert_eq!(img7.meta.active_width, 300);
+        assert_eq!(img7.meta.active_height, 400);
+        assert_eq!(img7.meta.cfa_pattern, "BGGR");
+        let rep7 = analyze_sharpness(&img7);
+        assert!(
+            rep7.tilt_vector.collapse_direction_label.contains("Bottom-Right"),
+            "Transverse (EXIF 7) transform of TL-tilted frame must point to Bottom-Right, got {}",
+            rep7.tilt_vector.collapse_direction_label
+        );
+
+        // Smoke-check every remaining EXIF orientation (2, 4, 5, 8) on non-square 400x300 frames:
+        for ori in [2u32, 4, 5, 8] {
+            let mut dng_ori = synthetic::generate_tilted_chart_dng(400, 300, 0.9);
+            assert!(patch_le_tiff_tag_u32(&mut dng_ori, 0x0112, ori));
+            let decoded = decode_raw_bytes(&dng_ori)
+                .unwrap_or_else(|e| panic!("Orientation={ori} decode failed: {e}"));
+            let (exp_w, exp_h) = if ori >= 5 { (300, 400) } else { (400, 300) };
+            assert_eq!((decoded.meta.active_width, decoded.meta.active_height), (exp_w, exp_h));
+        }
+    }
+
+    #[test]
+    fn test_collimated_reference_exif_and_no_false_star_hfr() {
+        let flat_dng = synthetic::generate_tilted_chart_dng(800, 600, 0.0);
+        let flat_img = decode_raw_bytes(&flat_dng).expect("collimated reference decode");
+        assert_eq!(
+            flat_img.meta.lens_model.as_deref(),
+            Some("FE 50mm F2 APO-Summicron (Collimated Reference)")
+        );
+        assert_eq!(flat_img.meta.focal_length_mm, Some(50.0));
+        assert_eq!(flat_img.meta.f_number, Some(2.0));
+
+        let flat_rep = analyze_sharpness(&flat_img);
+        for cell in &flat_rep.grid_3x3 {
+            assert_eq!(
+                cell.star_count, 0,
+                "Daylight collimated chart cell {} must not trigger false star detections, got {}",
+                cell.id, cell.star_count
+            );
+            assert!(cell.median_star_hfr_px.is_none());
+        }
+
+        let tilt_dng = synthetic::generate_tilted_chart_dng(800, 600, 0.9);
+        let tilt_img = decode_raw_bytes(&tilt_dng).expect("tilted chart decode");
+        assert_eq!(tilt_img.meta.focal_length_mm, Some(24.0));
+        assert_eq!(tilt_img.meta.f_number, Some(1.4));
+        let tilt_rep = analyze_sharpness(&tilt_img);
+        for cell in &tilt_rep.grid_3x3 {
+            assert_eq!(
+                cell.star_count, 0,
+                "Daylight tilted chart cell {} must not trigger false star detections, got {}",
+                cell.id, cell.star_count
+            );
+            assert!(cell.median_star_hfr_px.is_none());
+        }
     }
 
     #[test]

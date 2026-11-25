@@ -1014,6 +1014,11 @@ fn estimate_star_hfr(
     if w < 12 || h < 12 {
         return (0, None);
     }
+    // Genuine astrophotography starfields sit on a dark sky background; reject daylight
+    // test charts (brick walls, Siemens stars) whose median background exceeds 25% of full well.
+    if clip_ceil > 0.0 && bg > 0.25 * clip_ceil {
+        return (0, None);
+    }
     let peak_thresh = bg + (10.0 * sigma).max(25.0);
     let mut hfrs = Vec::new();
     let rad: isize = 4;
@@ -1046,10 +1051,11 @@ fn estimate_star_hfr(
                 continue;
             }
 
-            // Reject extended edges/lines: outer ring median should be close to local background.
+            // Reject extended edges/lines: outer ring should be uniform and close to local background.
             let mut flux_sum = 0.0f64;
             let mut r_flux_sum = 0.0f64;
             let mut outer_sum = 0.0f64;
+            let mut outer_sq_sum = 0.0f64;
             let mut outer_cnt = 0u32;
 
             for dy in -rad..=rad {
@@ -1057,7 +1063,9 @@ fn estimate_star_hfr(
                     let dist = ((dx * dx + dy * dy) as f64).sqrt();
                     let val = plane[((r as isize + dy) as usize) * w + (c as isize + dx) as usize];
                     if dist >= 3.6 {
-                        outer_sum += val as f64;
+                        let vf = val as f64;
+                        outer_sum += vf;
+                        outer_sq_sum += vf * vf;
                         outer_cnt += 1;
                     }
                 }
@@ -1067,12 +1075,19 @@ fn estimate_star_hfr(
             } else {
                 bg as f64
             };
+            let outer_std = if outer_cnt > 1 {
+                let var = (outer_sq_sum / outer_cnt as f64 - local_bg * local_bg).max(0.0);
+                var.sqrt()
+            } else {
+                0.0
+            };
             let net_peak = center as f64 - local_bg;
             if net_peak < (8.0 * sigma as f64).max(20.0) {
                 continue;
             }
-            // If outer ring is elevated far above global bg + 35% of peak, this is an extended object (wall/edge), not a star.
-            if (local_bg - bg as f64).abs() > 0.35 * net_peak {
+            // If outer ring is elevated far above global bg or has strong periodic texture
+            // (brick mortar / Siemens spokes), this is an extended pattern, not an isolated star.
+            if (local_bg - bg as f64).abs() > 0.35 * net_peak || outer_std > 0.22 * net_peak {
                 continue;
             }
 

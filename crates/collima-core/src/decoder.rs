@@ -1056,7 +1056,7 @@ fn apply_upright_orientation(img: &mut DecodedRawImage) {
             4 => (u, ah - 1 - v),
             5 => (v, u),
             6 => (v, ah - 1 - u),
-            7 => (ah - 1 - v, aw - 1 - u),
+            7 => (aw - 1 - v, ah - 1 - u),
             8 => (aw - 1 - v, u),
             _ => (u, v),
         }
@@ -1127,7 +1127,7 @@ fn apply_upright_orientation(img: &mut DecodedRawImage) {
                     4 => (u, ah_i - 1 - v),
                     5 => (v, u),
                     6 => (v, ah_i - 1 - u),
-                    7 => (ah_i - 1 - v, aw_i - 1 - u),
+                    7 => (aw_i - 1 - v, ah_i - 1 - u),
                     8 => (aw_i - 1 - v, u),
                     _ => (u, v),
                 };

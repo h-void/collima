@@ -94,6 +94,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     null,
   );
   const [evDraft, setEvDraft] = useState<number | null>(null);
+  const [overviewCssWidth, setOverviewCssWidth] = useState<number>(0);
   const displayEv = evDraft ?? session.evBoost;
 
   useEffect(() => {
@@ -225,6 +226,18 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     isCompactGrid,
     focusedStationIdx,
   ]);
+
+  // Track overview canvas CSS width so station boxes and labels re-scale cleanly on viewport resize
+  useEffect(() => {
+    const canvas = overviewCanvasRef.current;
+    if (!canvas || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0]?.contentRect.width ?? canvas.clientWidth);
+      if (w > 0) setOverviewCssWidth(w);
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
 
   // Draw Overview Canvas + 5x5 Contour Heatmap Overlay + 9 Interactive ROI Station Boxes
   useEffect(() => {
@@ -373,7 +386,10 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     const ah = Math.max(1, session.metadata.activeHeight);
     // Canvas pixels per CSS pixel: keeps strokes/labels legible regardless of
     // how far the full-resolution overview is scaled down inside the dock.
-    const cssPx = Math.max(1, ow / Math.max(1, canvas.clientWidth || ow));
+    const cssPx = Math.max(
+      1,
+      ow / Math.max(1, overviewCssWidth || canvas.clientWidth || ow),
+    );
 
     ctx.save();
     session.sharpness.grid3x3.forEach((cell, idx) => {
@@ -435,6 +451,7 @@ export const TiltInspector: React.FC<TiltInspectorProps> = ({
     session.metadata,
     showHeatmap,
     selectedStationIdx,
+    overviewCssWidth,
   ]);
 
   // Pointer drag inside any of the 9 loupes: either sync pan OR per-station ROI relocation

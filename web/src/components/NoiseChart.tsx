@@ -567,7 +567,9 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             >
               {kpis.primaryInflection
                 ? t.noise.kpiDualGain(kpis.primaryInflection.toIso)
-                : t.noise.kpiSingleGain}
+                : (chartGeom?.uniqueIsos.filter((iso) => iso > 0).length ?? 0) >= 4
+                  ? t.noise.kpiSingleGain
+                  : '—'}
             </span>
           </div>
 
@@ -790,6 +792,11 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                 {/* Dual Native ISO HCG Inflection Vertical Callouts */}
                 {series.inflections.map((inf, idx) => {
                   const x = chartGeom.xOfIso(inf.toIso);
+                  const pillW = 104;
+                  const pillX = Math.max(
+                    chartGeom.padL + 2,
+                    Math.min(chartGeom.W - chartGeom.padR - pillW - 2, x - pillW / 2),
+                  );
                   return (
                     <g key={`inf-${idx}`}>
                       <line
@@ -802,16 +809,16 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
                         strokeDasharray="4 3"
                       />
                       <rect
-                        x={x - 52}
+                        x={pillX}
                         y={chartGeom.padT + 4}
-                        width={104}
+                        width={pillW}
                         height={19}
                         rx={4}
                         fill="var(--bg-panel)"
                         stroke="var(--optical-green-border)"
                       />
                       <text
-                        x={x}
+                        x={pillX + pillW / 2}
                         y={chartGeom.padT + 16.5}
                         textAnchor="middle"
                         fontSize="9.5"
@@ -1067,7 +1074,7 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
             )}
 
             {/* Section 2: Compact 4-Channel Bayer Matrix */}
-            <div className="inspector-section">
+            <div className="inspector-section overflow-x-auto">
               <table className="channel-matrix-table mono-num">
                 <thead>
                   <tr>
