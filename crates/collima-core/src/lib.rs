@@ -1127,4 +1127,90 @@ mod tests {
         );
         assert_eq!(mixed.frames.last().unwrap().iso, 0);
     }
+
+    #[test]
+    fn test_zero_distance_station_drag_has_zero_wls_jump() {
+        for &tilt_strength in &[0.0f32, 0.85f32] {
+            let dng = synthetic::generate_tilted_chart_dng(800, 600, tilt_strength);
+            let img = decode_raw_bytes(&dng).expect("synthetic chart decode");
+            let base = analyze_sharpness(&img);
+
+            // Dragging ANY of the 9 stations by 0 px (same norm_x, norm_y) must preserve
+            // the 5x5 WLS background field and produce bit-exact (tx, ty, radial_falloff)
+            // and 5x5 heatmap normalization with zero jump.
+            for station_idx in 0..9 {
+                let existing = &base.grid_3x3[station_idx];
+                let center_ref = if station_idx == 4 {
+                    0.0
+                } else {
+                    base.center_sharpness
+                };
+                let updated_cell = evaluate_custom_roi(
+                    &img,
+                    &existing.id,
+                    existing.row,
+                    existing.col,
+                    existing.norm_x,
+                    existing.norm_y,
+                    center_ref,
+                );
+                let mut custom_3x3 = base.grid_3x3.clone();
+                custom_3x3[station_idx] = updated_cell;
+                let dragged = recompute_report_with_custom_3x3(custom_3x3, base.grid_5x5.clone());
+
+                assert_eq!(
+                    dragged.tilt_vector.tx, base.tilt_vector.tx,
+                    "Zero-distance drag of station {station_idx} (tilt={tilt_strength}) jumped tx"
+                );
+                assert_eq!(
+                    dragged.tilt_vector.ty, base.tilt_vector.ty,
+                    "Zero-distance drag of station {station_idx} (tilt={tilt_strength}) jumped ty"
+                );
+                assert_eq!(
+                    dragged.radial_falloff, base.radial_falloff,
+                    "Zero-distance drag of station {station_idx} (tilt={tilt_strength}) jumped radial_falloff"
+                );
+                assert_eq!(
+                    dragged.grade, base.grade,
+                    "Zero-distance drag of station {station_idx} (tilt={tilt_strength}) changed grade"
+                );
+                for (a, b) in dragged.grid_5x5.iter().zip(base.grid_5x5.iter()) {
+                    assert_eq!(
+                        a.relative_to_center, b.relative_to_center,
+                        "Zero-distance drag of station {station_idx} shifted 5x5 heatmap cell {}",
+                        a.id
+                    );
+                }
+            }
+
+            // A tiny 1% drag of TL on the tilted chart must also vary smoothly without jumping
+            // (previously dropping the 5x5 grid caused an abrupt jump even on tiny drags).
+            if tilt_strength > 0.5 {
+                let tl = &base.grid_3x3[0];
+                let mut nudged_3x3 = base.grid_3x3.clone();
+                nudged_3x3[0] = evaluate_custom_roi(
+                    &img,
+                    &tl.id,
+                    tl.row,
+                    tl.col,
+                    tl.norm_x + 0.01,
+                    tl.norm_y + 0.01,
+                    base.center_sharpness,
+                );
+                let nudged = recompute_report_with_custom_3x3(nudged_3x3, base.grid_5x5.clone());
+                assert!(
+                    (nudged.tilt_vector.tx - base.tilt_vector.tx).abs() < 0.02
+                        && (nudged.tilt_vector.ty - base.tilt_vector.ty).abs() < 0.02
+                        && (nudged.radial_falloff - base.radial_falloff).abs() < 0.03,
+                    "Small 1% TL drag should vary WLS fit smoothly: base=({:.4}, {:.4}, {:.4}), nudged=({:.4}, {:.4}, {:.4})",
+                    base.tilt_vector.tx,
+                    base.tilt_vector.ty,
+                    base.radial_falloff,
+                    nudged.tilt_vector.tx,
+                    nudged.tilt_vector.ty,
+                    nudged.radial_falloff
+                );
+            }
+        }
+    }
 }

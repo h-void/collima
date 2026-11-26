@@ -23,21 +23,79 @@ import type {
 declare const self: DedicatedWorkerGlobalScope;
 
 let wasmReadyPromise: Promise<unknown> | null = null;
+let wasmInitialized = false;
+let wasmWaitingInFlight = false;
 let activeSession: RawSession | null = null;
 let workerTaskChain: Promise<void> = Promise.resolve();
 let latestTiltOpenReqId = 0;
 let closedTiltFloorReqId = 0;
 let latestNoiseReqId = 0;
 
+function isFatalWasmError(err: unknown): boolean {
+  if (
+    typeof WebAssembly !== 'undefined' &&
+    (err instanceof WebAssembly.RuntimeError ||
+      err instanceof WebAssembly.CompileError ||
+      err instanceof WebAssembly.LinkError)
+  ) {
+    return true;
+  }
+  if (err instanceof Error) {
+    const msg = `${err.name}: ${err.message}`.toLowerCase();
+    if (
+      msg.includes('unreachable') ||
+      msg.includes('out of bounds') ||
+      msg.includes('memory access') ||
+      msg.includes('recursive use of an object') ||
+      msg.includes('null pointer passed to rust') ||
+      (msg.includes('wasm') && msg.includes('abort'))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isProgressTrackedWorkRequest(req: WorkerRequest): boolean {
+  return (
+    req.type === 'OPEN_RAW_FILE' ||
+    req.type === 'OPEN_SYNTHETIC_PRESET' ||
+    req.type === 'ANALYZE_NOISE_BATCH' ||
+    req.type === 'GENERATE_SYNTHETIC_ISO_SERIES'
+  );
+}
+
+function postLoadingEngineProgress(requestId: number) {
+  postWorkerMessage({
+    type: 'PROGRESS',
+    requestId,
+    stage: 'Loading Rust/WASM engine…',
+    progressKey: 'loading_engine',
+    completed: 0,
+    total: 0,
+  });
+}
+
 function ensureWasm(): Promise<unknown> {
   if (!wasmReadyPromise) {
-    wasmReadyPromise = initWasm().catch((err) => {
-      wasmReadyPromise = null;
-      throw err;
-    });
+    wasmReadyPromise = initWasm()
+      .then((mod) => {
+        wasmInitialized = true;
+        postWorkerMessage({ type: 'ENGINE_READY' });
+        return mod;
+      })
+      .catch((err) => {
+        wasmReadyPromise = null;
+        wasmInitialized = false;
+        throw err;
+      });
   }
   return wasmReadyPromise;
 }
+
+// Eagerly fetch and compile the ~1.7 MB gz WASM binary in the background on worker boot
+// while the user views the landing screen; failures are cleared for lazy retry on action.
+void ensureWasm().catch(() => {});
 
 function disposeActiveSession() {
   if (activeSession) {
@@ -183,7 +241,13 @@ function openSessionFromBytes(
       [overviewBuffer, ...patchBuffers],
     );
   } catch (err) {
-    session.free();
+    if (!isFatalWasmError(err)) {
+      try {
+        session.free();
+      } catch {
+        // Ignore cleanup failure after decode/render error
+      }
+    }
     throw err;
   }
 }
@@ -198,7 +262,34 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
       return;
     }
 
-    await ensureWasm();
+    if (
+      (req.type === 'OPEN_RAW_FILE' ||
+        req.type === 'OPEN_SYNTHETIC_PRESET' ||
+        req.type === 'UPDATE_RENDER_PARAMS' ||
+        req.type === 'RELOCATE_STATION' ||
+        req.type === 'RESET_STATIONS') &&
+      (req.requestId < latestTiltOpenReqId ||
+        req.requestId <= closedTiltFloorReqId)
+    ) {
+      return;
+    }
+    if (
+      (req.type === 'ANALYZE_NOISE_BATCH' ||
+        req.type === 'GENERATE_SYNTHETIC_ISO_SERIES') &&
+      req.requestId < latestNoiseReqId
+    ) {
+      return;
+    }
+
+    if (!wasmInitialized) {
+      postLoadingEngineProgress(req.requestId);
+      wasmWaitingInFlight = true;
+    }
+    try {
+      await ensureWasm();
+    } finally {
+      wasmWaitingInFlight = false;
+    }
 
     switch (req.type) {
       case 'OPEN_RAW_FILE': {
@@ -527,12 +618,20 @@ async function handleWorkerRequest(req: WorkerRequest): Promise<void> {
       }
     }
   } catch (err) {
+    const fatal = isFatalWasmError(err);
+    if (fatal) {
+      // Do not call activeSession.free() on a poisoned panic=abort WASM instance.
+      activeSession = null;
+      wasmInitialized = false;
+      wasmReadyPromise = null;
+    }
     const message =
       err instanceof Error ? err.message : String(err ?? 'Unknown WASM analysis error');
     postWorkerMessage({
       type: 'ERROR',
       requestId: req.requestId,
       message,
+      fatal,
     });
   }
 }
@@ -550,6 +649,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     req.type === 'CANCEL_NOISE_BATCH'
   ) {
     latestNoiseReqId = Math.max(latestNoiseReqId, req.requestId);
+  }
+
+  if (!wasmInitialized && wasmWaitingInFlight && isProgressTrackedWorkRequest(req)) {
+    postLoadingEngineProgress(req.requestId);
   }
 
   workerTaskChain = workerTaskChain.then(() => handleWorkerRequest(req));

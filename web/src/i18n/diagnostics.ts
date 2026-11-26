@@ -571,6 +571,18 @@ export function formatWorkerProgress(
   if (!progressKey) return fallbackStage;
   const p = params ?? {};
   switch (progressKey) {
+    case 'loading_engine':
+      switch (locale) {
+        case 'zh-CN':
+          return '正在加载 Rust/WASM 引擎…';
+        case 'zh-TW':
+          return '正在載入 Rust/WASM 引擎…';
+        case 'ja':
+          return 'Rust/WASM エンジンを読み込み中…';
+        case 'en':
+          return 'Loading Rust/WASM engine…';
+      }
+      break;
     case 'reading_file':
       switch (locale) {
         case 'zh-CN':

@@ -4,6 +4,7 @@ description = "In-memory RAW decoding, optical focal-plane tilt diagnostics, and
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

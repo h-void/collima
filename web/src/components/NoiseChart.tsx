@@ -175,13 +175,28 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
   // Aggregate Series KPIs
   const kpis = useMemo(() => {
     if (frames.length === 0) return null;
-    let minNoiseFrame = frames[0];
+    let minRawFrame = frames[0];
+    let minIso100Frame: DarkFrameReport | null = null;
+    let minIso100Value = Number.POSITIVE_INFINITY;
     let maxDrFrame = frames[0];
     let sumBlDrift = 0;
 
     for (const f of frames) {
-      if (f.meanReadNoiseAdu < minNoiseFrame.meanReadNoiseAdu) {
-        minNoiseFrame = f;
+      if (f.meanReadNoiseAdu < minRawFrame.meanReadNoiseAdu) {
+        minRawFrame = f;
+      }
+      const normVal =
+        f.meanReadNoiseIso100Norm !== null &&
+        Number.isFinite(f.meanReadNoiseIso100Norm)
+          ? Math.max(0, f.meanReadNoiseIso100Norm)
+          : f.iso > 0 &&
+              Number.isFinite(f.meanReadNoiseAdu) &&
+              f.meanReadNoiseAdu >= 0
+            ? f.meanReadNoiseAdu * (100 / f.iso)
+            : null;
+      if (normVal !== null && normVal < minIso100Value) {
+        minIso100Value = normVal;
+        minIso100Frame = f;
       }
       if (f.meanEngineeringDrEv > maxDrFrame.meanEngineeringDrEv) {
         maxDrFrame = f;
@@ -189,13 +204,24 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
       sumBlDrift += f.meanBlackOffsetAdu;
     }
 
+    let minNoiseFrame = minRawFrame;
+    let minNoiseValue = minRawFrame.meanReadNoiseAdu;
+    let minNoiseIsIso100 = false;
+    if (noiseAxisMode === 'iso100_norm' && minIso100Frame !== null) {
+      minNoiseFrame = minIso100Frame;
+      minNoiseValue = minIso100Value;
+      minNoiseIsIso100 = true;
+    }
+
     return {
       minNoiseFrame,
+      minNoiseValue,
+      minNoiseIsIso100,
       maxDrFrame,
       meanBlDrift: sumBlDrift / frames.length,
       primaryInflection: series.inflections[0] ?? null,
     };
-  }, [frames, series.inflections]);
+  }, [frames, series.inflections, noiseAxisMode]);
 
   // Compute SVG chart geometry, per-ISO aggregated curve buckets & duplicate-ISO node offsets
   const chartGeom = useMemo(() => {
@@ -528,11 +554,13 @@ export const NoiseChart: React.FC<NoiseChartProps> = ({ series, onClear }) => {
         <section className="grid grid-cols-2 lg:grid-cols-4 bg-[var(--bg-panel-subtle)] border-b border-[var(--hairline-default)] divide-x divide-y lg:divide-y-0 divide-[var(--hairline-subtle)]">
           <div className="px-4 py-2.5 flex items-baseline justify-between gap-2 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
             <span className="text-xs text-[var(--text-muted)]">
-              {t.noise.kpiBaseNoise}
+              {kpis.minNoiseIsIso100
+                ? t.noise.kpiBaseNoiseIso100
+                : t.noise.kpiBaseNoise}
             </span>
             <div className="sm:text-right mono-num">
               <span className="text-[13.5px] font-semibold text-[var(--text-primary)]">
-                {kpis.minNoiseFrame.meanReadNoiseAdu.toFixed(3)} ADU
+                {kpis.minNoiseValue.toFixed(3)} ADU
               </span>
               <span className="text-[11.5px] text-[var(--text-muted)] ml-1.5 whitespace-nowrap">
                 @ {formatIsoText(kpis.minNoiseFrame.iso)}

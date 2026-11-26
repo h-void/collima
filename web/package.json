@@ -1,7 +1,7 @@
 {
   "name": "collima-web",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "build:wasm": "wasm-pack build ../crates/collima-core --target web --release --out-dir ../../web/src/wasm-pkg",

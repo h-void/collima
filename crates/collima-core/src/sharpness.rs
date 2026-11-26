@@ -89,7 +89,7 @@ pub struct TiltVector {
     pub tx: f64,
     /// Vertical tilt gradient component (`+` = sharper toward Bottom, `-` = sharper toward Top).
     pub ty: f64,
-    /// Normalized tilt strength (`sqrt(tx^2 + ty^2)`). `< 0.08` excellent, `0.08..0.18` mild, `> 0.18` significant.
+    /// Normalized tilt strength (`sqrt(tx^2 + ty^2)`). `< 0.09` excellent/normal curvature, `0.09..0.20` mild, `>= 0.20` significant.
     pub magnitude: f64,
     /// Direction of peak sharpness plane tilt in degrees (`0° = Right`, `90° = Bottom`, `180° = Left`, `-90° = Top`).
     pub angle_deg: f64,
@@ -192,15 +192,16 @@ pub fn analyze_sharpness(img: &DecodedRawImage) -> SharpnessReport {
             grid_5x5.push(cell);
         }
     }
-    // Normalize 5x5 relative_to_center against its own (2,2) center if valid and positive.
-    let center_5 = grid_5x5[12].sharpness;
-    if grid_5x5[12].validity == CellValidity::Valid && center_5 > 1e-6 {
-        for cell in &mut grid_5x5 {
-            cell.relative_to_center = cell.sharpness / center_5;
-        }
+    // Normalize 5x5 relative_to_center consistently with custom station recomputation.
+    let norm_5 = effective_5x5_center_ref(&grid_3x3, &grid_5x5);
+    for cell in &mut grid_5x5 {
+        cell.relative_to_center = match norm_5 {
+            Some(ref_val) => cell.sharpness / ref_val,
+            None => 0.0,
+        };
     }
 
-    compute_report_from_grids(grid_3x3, grid_5x5, true)
+    compute_report_from_grids(grid_3x3, grid_5x5)
 }
 
 /// Re-evaluate sharpness of a single custom ROI centered at `(norm_x, norm_y)` when the user
@@ -227,6 +228,11 @@ pub fn evaluate_custom_roi(
 }
 
 /// Recompute optical summary metrics after one or more 3x3 stations have been dragged by the user.
+///
+/// Retains the full 5x5 background field in the WLS tilt/curvature fit while smoothly attenuating
+/// any canonical 5x5 tile whose paired 3x3 station was moved away from it, preventing discontinuous
+/// `(tx, ty, cr)` jumps on zero-distance or small drags while still letting relocated stations escape
+/// localized foreground obstructions.
 pub fn recompute_report_with_custom_3x3(
     mut grid_3x3: Vec<GridCellMetrics>,
     mut grid_5x5: Vec<GridCellMetrics>,
@@ -242,20 +248,19 @@ pub fn recompute_report_with_custom_3x3(
             0.0
         };
     }
+    let norm_5 = effective_5x5_center_ref(&grid_3x3, &grid_5x5);
     for cell in &mut grid_5x5 {
-        cell.relative_to_center = if center_ok {
-            cell.sharpness / center_raw
-        } else {
-            0.0
+        cell.relative_to_center = match norm_5 {
+            Some(ref_val) => cell.sharpness / ref_val,
+            None => 0.0,
         };
     }
-    compute_report_from_grids(grid_3x3, grid_5x5, false)
+    compute_report_from_grids(grid_3x3, grid_5x5)
 }
 
 fn compute_report_from_grids(
     grid_3x3: Vec<GridCellMetrics>,
     grid_5x5: Vec<GridCellMetrics>,
-    include_5x5_in_fit: bool,
 ) -> SharpnessReport {
     let center_sharpness = grid_3x3[4].sharpness;
     let center_validity = grid_3x3[4].validity;
@@ -364,8 +369,7 @@ fn compute_report_from_grids(
         .count();
 
     // Fit normalized surface r(u, v) = c0 + tx * u + ty * v - cr * (u^2 + v^2) / 2
-    let (tx, ty, radial_falloff) =
-        fit_tilt_and_curvature(&grid_3x3, &grid_5x5, include_5x5_in_fit);
+    let (tx, ty, radial_falloff) = fit_tilt_and_curvature(&grid_3x3, &grid_5x5);
 
     let mag = (tx * tx + ty * ty).sqrt();
     let angle_deg = if mag > 1e-6 {
@@ -1156,48 +1160,117 @@ fn estimate_star_hfr(
     (count, Some(hfrs[mid]))
 }
 
+/// Smoothly attenuate a canonical 5x5 tile's WLS weight when the user relocates its paired
+/// 3x3 station away from that tile (e.g., off a foreground obstruction), while keeping full
+/// weight (`1.0`) for unmoved stations and all 16 non-station 5x5 tiles so zero-distance or
+/// small drags never cause discontinuous `(tx, ty, cr)` jumps.
+fn canonical_tile_keep(grid_3x3: &[GridCellMetrics], tile: &GridCellMetrics) -> f64 {
+    if tile.row >= 5 || tile.col >= 5 || (tile.row & 1) != 0 || (tile.col & 1) != 0 {
+        return 1.0;
+    }
+    let station_idx = (tile.row / 2) * 3 + (tile.col / 2);
+    let Some(station) = grid_3x3.get(station_idx) else {
+        return 1.0;
+    };
+    if !station.norm_x.is_finite()
+        || !station.norm_y.is_finite()
+        || !tile.norm_x.is_finite()
+        || !tile.norm_y.is_finite()
+    {
+        return 1.0;
+    }
+    let dx = (station.norm_x - tile.norm_x) as f64;
+    let dy = (station.norm_y - tile.norm_y) as f64;
+    let dist = dx.hypot(dy);
+    const DEADBAND: f64 = 0.015;
+    const FADE_END: f64 = 0.12;
+    if dist <= DEADBAND {
+        1.0
+    } else if dist >= FADE_END {
+        0.0
+    } else {
+        let t = (dist - DEADBAND) / (FADE_END - DEADBAND);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    }
+}
+
+/// Center sharpness reference for normalizing the 5x5 grid: uses `grid_5x5[12]` when `MC` is at
+/// its canonical center, and smoothly transitions to `grid_3x3[4]` when `MC` is dragged away
+/// from the center tile (or falls back to `grid_3x3[4]` if `grid_5x5[12]` is invalid).
+fn effective_5x5_center_ref(
+    grid_3x3: &[GridCellMetrics],
+    grid_5x5: &[GridCellMetrics],
+) -> Option<f64> {
+    let center_3 = grid_3x3
+        .get(4)
+        .filter(|c| c.validity == CellValidity::Valid && c.sharpness > 1e-6)
+        .map(|c| c.sharpness);
+    let center_5_tile = grid_5x5.get(12);
+    let center_5 = center_5_tile
+        .filter(|c| c.validity == CellValidity::Valid && c.sharpness > 1e-6)
+        .map(|c| c.sharpness);
+    let mc_keep = center_5_tile
+        .map(|tile| canonical_tile_keep(grid_3x3, tile))
+        .unwrap_or(1.0);
+
+    match (center_5, center_3) {
+        (Some(c5), Some(c3)) => Some(mc_keep * c5 + (1.0 - mc_keep) * c3),
+        (Some(c5), None) => Some(c5),
+        (None, Some(c3)) => Some(c3),
+        (None, None) => None,
+    }
+}
+
 /// Weighted least-squares fit of normalized sharpness `r(u, v) = c0 + tx * u + ty * v - cr * (u^2 + v^2) / 2`
 /// over valid cells in `[-1, 1]^2` to cleanly orthogonalize linear Focal-Plane Tilt `(tx, ty)` from
 /// symmetric Radial Field Curvature `cr`.
 fn fit_tilt_and_curvature(
     grid_3x3: &[GridCellMetrics],
     grid_5x5: &[GridCellMetrics],
-    include_5x5: bool,
 ) -> (f64, f64, f64) {
     let mut samples: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(34);
 
-    let (center_3, c3_ok) = grid_3x3
+    let center_3 = grid_3x3
         .get(4)
-        .map(|c| (c.sharpness, c.validity == CellValidity::Valid && c.sharpness > 1e-6))
-        .unwrap_or((0.0, false));
-    if c3_ok {
+        .filter(|c| c.validity == CellValidity::Valid && c.sharpness > 1e-6)
+        .map(|c| c.sharpness);
+    if let Some(c3) = center_3 {
         for c in grid_3x3 {
             if c.validity == CellValidity::Valid && c.norm_x.is_finite() && c.norm_y.is_finite() {
                 let u = (c.norm_x as f64 - 0.5) * 2.0;
                 let v = (c.norm_y as f64 - 0.5) * 2.0;
-                let r = (c.sharpness / center_3).clamp(0.0, 2.5);
+                let r = (c.sharpness / c3).clamp(0.0, 2.5);
                 samples.push((u, v, r, 1.5));
             }
         }
     }
 
-    if include_5x5 {
-        let (center_5, c5_ok) = grid_5x5
-            .get(12)
-            .map(|c| (c.sharpness, c.validity == CellValidity::Valid && c.sharpness > 1e-6))
-            .unwrap_or((0.0, false));
-        let valid_5 = grid_5x5
-            .iter()
-            .filter(|c| c.validity == CellValidity::Valid)
-            .count();
-        if valid_5 >= 10 && c5_ok {
-            for c in grid_5x5 {
-                if c.validity == CellValidity::Valid && c.norm_x.is_finite() && c.norm_y.is_finite()
-                {
+    let center_5_tile = grid_5x5.get(12);
+    let center_5 = center_5_tile
+        .filter(|c| c.validity == CellValidity::Valid && c.sharpness > 1e-6)
+        .map(|c| c.sharpness);
+    let mc_keep = center_5_tile
+        .map(|tile| canonical_tile_keep(grid_3x3, tile))
+        .unwrap_or(1.0);
+    let norm_5 = match (center_5, center_3) {
+        (Some(c5), Some(c3)) => Some(mc_keep * c5 + (1.0 - mc_keep) * c3),
+        (Some(c5), None) if mc_keep > 0.0 => Some(c5),
+        (None, Some(c3)) if mc_keep < 1.0 => Some(c3),
+        _ => None,
+    };
+    let valid_5 = grid_5x5
+        .iter()
+        .filter(|c| c.validity == CellValidity::Valid)
+        .count();
+    if let Some(c5_ref) = norm_5.filter(|_| valid_5 >= 10) {
+        for c in grid_5x5 {
+            if c.validity == CellValidity::Valid && c.norm_x.is_finite() && c.norm_y.is_finite() {
+                let w = 0.8 * canonical_tile_keep(grid_3x3, c);
+                if w > 1e-6 {
                     let u = (c.norm_x as f64 - 0.5) * 2.0;
                     let v = (c.norm_y as f64 - 0.5) * 2.0;
-                    let r = (c.sharpness / center_5).clamp(0.0, 2.5);
-                    samples.push((u, v, r, 0.8));
+                    let r = (c.sharpness / c5_ref).clamp(0.0, 2.5);
+                    samples.push((u, v, r, w));
                 }
             }
         }

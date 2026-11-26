@@ -1,11 +1,12 @@
 [package]
 name = "collima"
-version = "0.2.0"
+version = "0.2.1"
 description = "Camera sensor read-noise & lens optical focal-plane tilt diagnostics workbench"
 authors = ["h-void"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/h-void/collima"
 edition = "2021"
+rust-version = "1.88"
 
 [lib]
 name = "collima_desktop_lib"

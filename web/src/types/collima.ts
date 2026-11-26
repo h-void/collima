@@ -272,6 +272,7 @@ export type WorkerRequest =
     };
 
 export type WorkerProgressKey =
+  | 'loading_engine'
   | 'reading_file'
   | 'decoding_bayer'
   | 'rendering_patches'
@@ -280,6 +281,9 @@ export type WorkerProgressKey =
   | 'generating_synth_iso';
 
 export type WorkerResponse =
+  | {
+      type: 'ENGINE_READY';
+    }
   | {
       type: 'PROGRESS';
       requestId: number;
@@ -337,4 +341,5 @@ export type WorkerResponse =
       type: 'ERROR';
       requestId: number;
       message: string;
+      fatal?: boolean;
     };

@@ -162,6 +162,7 @@ export interface TranslationMessages {
     exportDialogJsonTitle: string;
 
     kpiBaseNoise: string;
+    kpiBaseNoiseIso100: string;
     kpiPeakDr: string;
     kpiGainArch: string;
     kpiSingleGain: string;
@@ -389,6 +390,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       exportDialogJsonTitle: '导出 JSON 标定数据',
 
       kpiBaseNoise: '最低读出噪声',
+      kpiBaseNoiseIso100: '最低等效底噪 (ISO 100)',
       kpiPeakDr: '峰值工程动态范围',
       kpiGainArch: '转换增益架构',
       kpiSingleGain: '单斜率线性增益',
@@ -615,6 +617,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       exportDialogJsonTitle: '匯出 JSON 標定資料',
 
       kpiBaseNoise: '最低讀出雜訊',
+      kpiBaseNoiseIso100: '最低等效雜訊 (ISO 100)',
       kpiPeakDr: '峰值工程動態範圍',
       kpiGainArch: '轉換增益架構',
       kpiSingleGain: '單斜率線性增益',
@@ -841,6 +844,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       exportDialogJsonTitle: 'Export JSON Calibration Data',
 
       kpiBaseNoise: 'Lowest Read Noise',
+      kpiBaseNoiseIso100: 'Lowest Input Noise (ISO 100)',
       kpiPeakDr: 'Peak Engineering DR',
       kpiGainArch: 'Gain Architecture',
       kpiSingleGain: 'Single-Slope Linear',
@@ -1067,6 +1071,7 @@ export const MESSAGES: Record<LocaleCode, TranslationMessages> = {
       exportDialogJsonTitle: 'JSON キャリブレーションデータを保存',
 
       kpiBaseNoise: '最小読み出しノイズ',
+      kpiBaseNoiseIso100: '最小入力換算ノイズ (ISO 100)',
       kpiPeakDr: '最大工学DR',
       kpiGainArch: 'ゲイン構成',
       kpiSingleGain: 'シングルゲイン線形',

@@ -75,6 +75,7 @@ export const App: React.FC = () => {
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const statusScrollRef = useRef<HTMLDivElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const engineReadyRef = useRef<boolean>(false);
   const reqIdRef = useRef<number>(1);
   const activeTiltSessionReqRef = useRef<number>(0);
   const activeTiltRenderReqRef = useRef<number>(0);
@@ -147,17 +148,29 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const sendWorkerRequest = useCallback((req: WorkerRequest) => {
-    setErrorMsg(null);
-    workerRef.current?.postMessage(req);
+  const terminateWorker = useCallback((target?: Worker) => {
+    const current = workerRef.current;
+    if (!current) return;
+    if (target && current !== target) return;
+    current.onmessage = null;
+    current.onerror = null;
+    current.onmessageerror = null;
+    current.terminate();
+    workerRef.current = null;
+    engineReadyRef.current = false;
   }, []);
 
-  useEffect(() => {
+  const ensureWorker = useCallback((): Worker => {
+    if (workerRef.current) {
+      return workerRef.current;
+    }
+
     const worker = new Worker(
       new URL('./workers/analyzer.worker.ts', import.meta.url),
       { type: 'module' },
     );
     workerRef.current = worker;
+    engineReadyRef.current = false;
 
     const clearProgressIfMatch = (requestId: number) => {
       setProgress((prev) =>
@@ -165,9 +178,26 @@ export const App: React.FC = () => {
       );
     };
 
+    const handleFatalWorkerError = (message: string) => {
+      if (workerRef.current !== worker) return;
+      // Terminate the poisoned worker (e.g. panic=abort WASM trap / worker crash)
+      // and leave workerRef null so the next user action lazily spawns a fresh worker.
+      terminateWorker(worker);
+      activeTiltSessionReqRef.current = 0;
+      activeNoiseReqRef.current = 0;
+      setProgress(null);
+      setTiltSession(null);
+      setErrorMsg(message);
+    };
+
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      if (workerRef.current !== worker) return;
       const msg = event.data;
       switch (msg.type) {
+        case 'ENGINE_READY': {
+          engineReadyRef.current = true;
+          break;
+        }
         case 'PROGRESS': {
           const isActiveReq =
             msg.requestId === activeTiltSessionReqRef.current ||
@@ -294,6 +324,10 @@ export const App: React.FC = () => {
         }
         case 'ERROR': {
           clearProgressIfMatch(msg.requestId);
+          if (msg.fatal) {
+            handleFatalWorkerError(msg.message || '');
+            return;
+          }
           const isCurrentError =
             msg.requestId === activeTiltSessionReqRef.current ||
             msg.requestId === activeTiltRenderReqRef.current ||
@@ -308,15 +342,53 @@ export const App: React.FC = () => {
     };
 
     worker.onerror = (err) => {
-      setProgress(null);
-      setErrorMsg(err.message || '');
+      handleFatalWorkerError(err.message || '');
     };
 
-    return () => {
-      worker.terminate();
-      workerRef.current = null;
+    worker.onmessageerror = () => {
+      handleFatalWorkerError('');
     };
-  }, []);
+
+    return worker;
+  }, [terminateWorker]);
+
+  const sendWorkerRequest = useCallback(
+    (req: WorkerRequest) => {
+      setErrorMsg(null);
+      if (
+        (req.type === 'CLOSE_SESSION' || req.type === 'CANCEL_NOISE_BATCH') &&
+        !workerRef.current
+      ) {
+        return;
+      }
+      const worker = ensureWorker();
+      if (
+        !engineReadyRef.current &&
+        (req.type === 'OPEN_RAW_FILE' ||
+          req.type === 'OPEN_SYNTHETIC_PRESET' ||
+          req.type === 'ANALYZE_NOISE_BATCH' ||
+          req.type === 'GENERATE_SYNTHETIC_ISO_SERIES')
+      ) {
+        setProgress({
+          requestId: req.requestId,
+          stage: 'Loading Rust/WASM engine…',
+          progressKey: 'loading_engine',
+          completed: 0,
+          total: 0,
+        });
+      }
+      worker.postMessage(req);
+    },
+    [ensureWorker],
+  );
+
+  // Eagerly spawn the worker on mount so WASM downloads & compiles while viewing landing screen.
+  useEffect(() => {
+    ensureWorker();
+    return () => {
+      terminateWorker();
+    };
+  }, [ensureWorker, terminateWorker]);
 
   const handleFilesAccepted = (files: File[]) => {
     const requestId = ++reqIdRef.current;
